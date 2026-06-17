@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────────
+# SkillMap AI — .gitignore
+# ─────────────────────────────────────────────────────────────────
+
+# ── Python ────────────────────────────────────────────────────────
+backend/venv/
+backend/.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ── Environment variables (NEVER commit these) ────────────────────
+backend/.env
+frontend/.env.local
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# ── Database ──────────────────────────────────────────────────────
+*.db
+*.sqlite3
+
+# ── Node ──────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# ── IDE ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Testing ───────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Logs ──────────────────────────────────────────────────────────
+*.log
