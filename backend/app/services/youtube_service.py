@@ -24,12 +24,14 @@ Design pattern:
 """
 
 import logging
+import uuid
 import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 from sqlalchemy.orm import Session
+from youtube_transcript_api import YouTubeTranscriptApi
 
 from app.config import get_settings
 from app.models.roadmap import Roadmap, RoadmapStatus
@@ -87,47 +89,21 @@ class YouTubeService:
         db: Session,
     ) -> RoadmapImportResponse:
         """
-        Full import pipeline: URL → DB Roadmap + Videos.
-
-        Steps:
-          1. Extract playlist ID from URL
-          2. Fetch playlist metadata from YouTube
-          3. Fetch all video items with pagination
-          4. Persist Roadmap record (status=PROCESSING)
-          5. Persist all Video records in a single bulk insert
-          6. Flip roadmap status to ACTIVE
-          7. Return RoadmapImportResponse
-
-        Args:
-            playlist_url: Any valid YouTube playlist URL.
-            user_id:      UUID of the authenticated user.
-            db:           SQLAlchemy session (injected by dependency).
-
-        Returns:
-            RoadmapImportResponse with roadmap_id, title, total_videos.
-
-        Raises:
-            BadRequestException:  If the URL contains no valid playlist ID,
-                                  or the API key is not configured.
-            NotFoundException:    If the playlist doesn't exist or is private.
-            BadRequestException:  If YouTube returns a rate-limit (429) or
-                                  quota-exceeded (403) error.
+        Creates a skeleton Roadmap in the database with status = IMPORTING.
+        The actual video ingestion, module generation, note generation, and indexing
+        run asynchronously in the background.
         """
         self._assert_api_key_configured()
 
         # Step 1 — Extract playlist ID
         playlist_id = self._extract_playlist_id(playlist_url)
-        logger.info("Starting import for playlist_id=%s user_id=%s", playlist_id, user_id)
+        logger.info("Starting skeleton import for playlist_id=%s user_id=%s", playlist_id, user_id)
 
-        # Step 2 — Fetch playlist metadata
+        # Step 2 — Fetch playlist metadata synchronously (helps check if it exists early)
         metadata = self._fetch_playlist_metadata(playlist_id)
         logger.info("Fetched metadata: title=%r", metadata["title"])
 
-        # Step 3 — Fetch all video items
-        raw_videos = self._fetch_all_playlist_videos(playlist_id)
-        logger.info("Fetched %d video(s) from playlist", len(raw_videos))
-
-        # Step 4 — Persist roadmap (PROCESSING state)
+        # Step 3 — Persist skeleton roadmap (IMPORTING state, total_videos=0 initially)
         roadmap = Roadmap(
             user_id=user_id,
             title=metadata["title"],
@@ -135,49 +111,21 @@ class YouTubeService:
             playlist_url=playlist_url,
             playlist_id=playlist_id,
             thumbnail_url=metadata.get("thumbnail_url"),
-            total_videos=len(raw_videos),
+            total_videos=0,
             completed_videos=0,
-            status=RoadmapStatus.PROCESSING,
+            status=RoadmapStatus.IMPORTING,
         )
         db.add(roadmap)
-        db.flush()  # flush to get roadmap.id without committing yet
-        logger.debug("Roadmap row created id=%s", roadmap.id)
-
-        # Step 5 — Bulk insert video records
-        video_objects = [
-            Video(
-                roadmap_id=roadmap.id,
-                youtube_id=v["youtube_id"],
-                title=v["title"],
-                description=v.get("description"),
-                thumbnail_url=v.get("thumbnail_url"),
-                duration_seconds=v.get("duration_seconds"),
-                position=v["position"],
-                ai_notes_status=AINotesStatus.PENDING,
-            )
-            for v in raw_videos
-        ]
-        db.bulk_save_objects(video_objects)
-
-        # Step 6 — Mark roadmap as ACTIVE
-        roadmap.status = RoadmapStatus.ACTIVE
         db.commit()
         db.refresh(roadmap)
-        logger.info("Import complete for roadmap_id=%s", roadmap.id)
+        logger.info("Skeleton roadmap created: id=%s title=%r", roadmap.id, roadmap.title)
 
-        # Trigger semantic indexing
-        try:
-            from app.services.search_service import SearchService
-            SearchService().index_roadmap(roadmap.id, db)
-        except Exception as exc:
-            logger.error("Failed to run search indexing for roadmap %s on import: %s", roadmap.id, exc)
-
-        # Step 7 — Return response
         return RoadmapImportResponse(
             roadmap_id=roadmap.id,
             title=roadmap.title,
-            total_videos=roadmap.total_videos,
+            total_videos=0,
             status=roadmap.status,
+            message="Playlist import started in the background."
         )
 
     # ─────────────────────────────────────────────────────────────
@@ -528,3 +476,173 @@ class YouTubeService:
             self._client.close()
         except Exception:
             pass
+
+
+def run_background_pipeline(roadmap_id: uuid.UUID, user_id: uuid.UUID):
+    """
+    Asynchronous background pipeline for video ingestion, module grouping,
+    parallel notes generation, search indexing, and initial insights compilation.
+    """
+    from app.database import SessionLocal
+    from app.services.youtube_service import YouTubeService
+    from app.services.module_service import ModuleService
+    from app.services.search_service import SearchService
+    from app.services.insights_service import InsightsService
+    from app.models.roadmap import Roadmap, RoadmapStatus
+    from app.models.video import Video, AINotesStatus
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+
+    logger.info("Starting background pipeline for roadmap %s", roadmap_id)
+    db = SessionLocal()
+    try:
+        roadmap = db.query(Roadmap).filter(Roadmap.id == roadmap_id).first()
+        if not roadmap:
+            logger.error("Background pipeline: Roadmap %s not found in DB", roadmap_id)
+            return
+
+        # ── Step 1: Import Videos & Transcripts ───────────────────
+        # Status is already IMPORTING
+        yt_service = YouTubeService()
+        logger.info("Background pipeline Step 1: Ingesting videos for roadmap %s", roadmap_id)
+        
+        raw_videos = yt_service._fetch_all_playlist_videos(roadmap.playlist_id)
+        logger.info("Background pipeline: Fetched %d videos from playlist", len(raw_videos))
+
+        # Update roadmap total videos count
+        roadmap.total_videos = len(raw_videos)
+        db.flush()
+
+        # Fetch transcripts and construct Video rows
+        video_objects = []
+        for v in raw_videos:
+            youtube_id = v["youtube_id"]
+            transcript_text = None
+            try:
+                from youtube_transcript_api import YouTubeTranscriptApi
+                logger.info("Background pipeline: Fetching transcript for youtube_id=%s", youtube_id)
+                transcript_list = YouTubeTranscriptApi.get_transcript(youtube_id)
+                transcript_text = " ".join([t["text"] for t in transcript_list])
+            except Exception as exc:
+                logger.warning("Background pipeline: Could not fetch transcript for youtube_id=%s: %s", youtube_id, exc)
+
+            video_objects.append(
+                Video(
+                    roadmap_id=roadmap.id,
+                    youtube_id=youtube_id,
+                    title=v["title"],
+                    description=v.get("description"),
+                    thumbnail_url=v.get("thumbnail_url"),
+                    duration_seconds=v.get("duration_seconds"),
+                    position=v["position"],
+                    ai_notes_status=AINotesStatus.PENDING,
+                    transcript_text=transcript_text,
+                )
+            )
+        db.bulk_save_objects(video_objects)
+        db.commit()
+        
+        # Refresh roadmap and fetch videos to get database IDs
+        db.refresh(roadmap)
+        videos = db.query(Video).filter(Video.roadmap_id == roadmap_id).order_by(Video.position).all()
+
+        # ── Step 2: Generate Learning Modules ─────────────────────
+        logger.info("Background pipeline Step 2: Generating modules for roadmap %s", roadmap_id)
+        roadmap.status = RoadmapStatus.GENERATING_MODULES
+        db.commit()
+
+        module_service = ModuleService()
+        try:
+            module_service.generate_and_store_modules(roadmap_id=roadmap.id, user_id=user_id, db=db)
+        except Exception as exc:
+            logger.error("Background pipeline: Module generation failed: %s. Using fallback.", exc)
+
+        # ── Step 3: Generate AI Notes (in parallel) ──────────────
+        logger.info("Background pipeline Step 3: Generating AI notes for roadmap %s", roadmap_id)
+        roadmap.status = RoadmapStatus.GENERATING_NOTES
+        db.commit()
+
+        # Resolve module names for each video (best effort context)
+        modules = module_service.get_roadmap_modules(roadmap_id=roadmap.id, user_id=user_id, db=db)
+        video_to_module_name = {}
+        for mod in modules:
+            for mv in mod.videos:
+                video_to_module_name[mv.id] = mod.name
+
+        # Mark all videos as generating
+        for video in videos:
+            video.ai_notes_status = AINotesStatus.GENERATING
+        db.commit()
+
+        def fetch_notes(v_id, title, desc):
+            try:
+                from app.services.ai_service import AIService
+                ai = AIService()
+                mod_name = video_to_module_name.get(v_id)
+                notes_dict = ai.generate_video_notes(
+                    video_title=title,
+                    roadmap_title=roadmap.title,
+                    module_name=mod_name,
+                    video_description=desc,
+                )
+                return v_id, notes_dict, AINotesStatus.DONE
+            except Exception as e:
+                logger.error("Background notes fetch failed for video %s: %s", v_id, e)
+                return v_id, None, AINotesStatus.FAILED
+
+        # Run notes generation requests in parallel (max 5 threads)
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [
+                executor.submit(fetch_notes, video.id, video.title, video.description)
+                for video in videos
+            ]
+            results = [f.result() for f in futures]
+
+        # Save generated notes to database
+        for v_id, notes_dict, note_status in results:
+            video = db.query(Video).filter(Video.id == v_id).first()
+            if video:
+                video.ai_notes_status = note_status
+                if notes_dict:
+                    video.ai_notes = json.dumps(notes_dict)
+                else:
+                    # Fallback notes if failed
+                    from app.services.ai_service import AIService
+                    fallback_notes = AIService()._generate_fallback_notes(video.title, roadmap.title)
+                    video.ai_notes = json.dumps(fallback_notes)
+                    video.ai_notes_status = AINotesStatus.DONE
+        db.commit()
+
+        # ── Step 4: Build Search Index ────────────────────────────
+        logger.info("Background pipeline Step 4: Building search index for roadmap %s", roadmap_id)
+        roadmap.status = RoadmapStatus.BUILDING_SEARCH_INDEX
+        db.commit()
+
+        search_service = SearchService()
+        search_service.index_roadmap(roadmap_id, db)
+
+        # ── Step 5: Generate Initial Insights ─────────────────────
+        logger.info("Background pipeline Step 5: Generating initial insights for roadmap %s", roadmap_id)
+        insights_service = InsightsService()
+        try:
+            insights = insights_service.get_roadmap_insights(roadmap_id=roadmap.id, user_id=user_id, db=db)
+            roadmap.insights_json = json.dumps(insights)
+        except Exception as exc:
+            logger.error("Background pipeline: Insights generation failed: %s", exc)
+
+        # ── Step 6: Ready! ────────────────────────────────────────
+        logger.info("Background pipeline finished successfully. Roadmap %s is READY", roadmap_id)
+        roadmap.status = RoadmapStatus.READY
+        db.commit()
+
+    except Exception as exc:
+        logger.error("Background pipeline failed for roadmap %s: %s", roadmap_id, exc)
+        try:
+            roadmap = db.query(Roadmap).filter(Roadmap.id == roadmap_id).first()
+            if roadmap:
+                roadmap.status = RoadmapStatus.FAILED
+                db.commit()
+        except Exception as db_exc:
+            logger.error("Failed to set FAILED status for roadmap %s: %s", roadmap_id, db_exc)
+    finally:
+        db.close()

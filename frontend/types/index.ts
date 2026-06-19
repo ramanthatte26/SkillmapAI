@@ -35,7 +35,16 @@ export interface RegisterRequest {
 
 // ── Roadmaps ──────────────────────────────────────────────────────
 
-export type RoadmapStatus = 'processing' | 'active' | 'archived';
+export type RoadmapStatus =
+  | 'processing'
+  | 'active'
+  | 'archived'
+  | 'importing'
+  | 'generating_modules'
+  | 'generating_notes'
+  | 'building_search_index'
+  | 'ready'
+  | 'failed';
 export type AINotesStatus = 'pending' | 'generating' | 'done' | 'failed';
 
 export interface RoadmapSummary {
@@ -164,6 +173,8 @@ export interface SearchResult {
   module_name: string | null;
   similarity_score: number;
   matched_content_preview: string;
+  matched_snippet?: string;
+  source_type: string;
 }
 
 export interface SearchResponse {

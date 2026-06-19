@@ -98,6 +98,10 @@ class Video(Base, TimestampMixin):
         default=AINotesStatus.PENDING,
         nullable=False,
     )
+    transcript_text: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
 
     # ── Relationships ──────────────────────────────────────────────
     roadmap: Mapped["Roadmap"] = relationship(

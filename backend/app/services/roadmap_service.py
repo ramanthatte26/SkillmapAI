@@ -161,3 +161,53 @@ class RoadmapService:
             video.is_completed = video.id in completed_video_ids
 
         return RoadmapDetailResponse.model_validate(roadmap)
+
+    # ─────────────────────────────────────────────────────────────
+    # Delete roadmap
+    # ─────────────────────────────────────────────────────────────
+
+    def delete_roadmap(
+        self,
+        roadmap_id: uuid.UUID,
+        user_id: uuid.UUID,
+        db: Session,
+    ) -> None:
+        """
+        Verify roadmap ownership, delete search vectors from ChromaDB, and
+        delete the SQL Roadmap record (cascading deletes handle related SQL tables).
+        """
+        roadmap = (
+            db.query(Roadmap)
+            .filter(Roadmap.id == roadmap_id)
+            .first()
+        )
+
+        if roadmap is None:
+            logger.warning("delete_roadmap: roadmap_id=%s not found", roadmap_id)
+            raise NotFoundException("Roadmap")
+
+        # Ownership check
+        if roadmap.user_id != user_id:
+            logger.warning(
+                "delete_roadmap: user %s attempted to delete roadmap %s owned by %s",
+                user_id, roadmap_id, roadmap.user_id,
+            )
+            raise ForbiddenException(
+                "You do not have permission to delete this roadmap."
+            )
+
+        logger.info("delete_roadmap: deleting roadmap %s (%r)", roadmap_id, roadmap.title)
+
+        # 1. Clear ChromaDB vectors
+        from app.services.search_service import SearchService
+        try:
+            search_service = SearchService()
+            search_service.vector_service.delete_by_roadmap(str(roadmap_id))
+        except Exception as exc:
+            logger.error("delete_roadmap: ChromaDB vector deletion failed: %s", exc)
+
+        # 2. Delete from PostgreSQL
+        db.delete(roadmap)
+        db.commit()
+        logger.info("delete_roadmap: SQL roadmap %s deleted successfully", roadmap_id)
+

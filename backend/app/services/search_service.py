@@ -81,8 +81,35 @@ class SearchService:
         # Join non-empty metadata fields
         return "\n\n".join([p for p in parts if p.split(":", 1)[1].strip()])
 
+    def chunk_transcript(self, text: str) -> list[str]:
+        """
+        Chunks transcript text into cohesive blocks of 500-1000 words.
+        Ensures chunks align on sentence boundaries where possible.
+        """
+        if not text:
+            return []
+        words = text.split()
+        chunks = []
+        target_size = 750
+        current_chunk = []
+        
+        for word in words:
+            current_chunk.append(word)
+            if len(current_chunk) >= 500:
+                if len(current_chunk) >= target_size or word.endswith('.') or word.endswith('?') or word.endswith('!'):
+                    if len(current_chunk) <= 1000:
+                        chunks.append(" ".join(current_chunk))
+                        current_chunk = []
+            if len(current_chunk) >= 1000:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = []
+                
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
+        return chunks
+
     def index_video(self, video_id: uuid.UUID, db: Session):
-        """Build and index a single video document in ChromaDB."""
+        """Build and index a single video document and its transcript chunks in ChromaDB."""
         try:
             logger.info("Indexing video %s in ChromaDB", video_id)
             video = db.query(Video).filter(Video.id == video_id).first()
@@ -103,6 +130,11 @@ class SearchService:
                 module_id = mv.module.id
                 break
 
+            # 1. Clear any existing documents for this video in ChromaDB
+            self.vector_service.collection.delete(where={"video_id": str(video.id)})
+            logger.info("index_video: Cleared existing documents in ChromaDB for video %s", video.id)
+
+            # 2. Build and index the metadata/notes knowledge document
             doc_text = self.build_knowledge_document(
                 roadmap_title=roadmap.title,
                 module_name=module_name,
@@ -111,24 +143,57 @@ class SearchService:
                 ai_notes_json=video.ai_notes
             )
 
-            # Generate local embedding
             embedding = self.embedding_service.generate_embedding(doc_text)
+            source_type = "notes" if video.ai_notes else "metadata"
 
-            # Persist to ChromaDB
-            self.vector_service.upsert_document(
-                document_id=str(video.id),
-                roadmap_id=str(roadmap.id),
-                video_id=str(video.id),
-                module_id=str(module_id) if module_id else None,
-                content=doc_text,
-                embedding=embedding
+            self.vector_service.collection.upsert(
+                ids=[str(video.id)],
+                embeddings=[embedding],
+                documents=[doc_text],
+                metadatas=[{
+                    "roadmap_id": str(roadmap.id),
+                    "video_id": str(video.id),
+                    "module_id": str(module_id) if module_id else "",
+                    "source_type": source_type
+                }]
             )
-            logger.info("index_video: Video %s indexed successfully", video_id)
+            logger.info("index_video: Video %s metadata/notes indexed successfully (source_type=%s)", video_id, source_type)
+
+            # 3. Chunk and index the transcript if available
+            if video.transcript_text:
+                chunks = self.chunk_transcript(video.transcript_text)
+                if chunks:
+                    logger.info("index_video: Indexing %d transcript chunks for video %s", len(chunks), video_id)
+                    chunk_texts = []
+                    chunk_ids = []
+                    chunk_metadatas = []
+                    
+                    for idx, chunk in enumerate(chunks):
+                        chunk_ids.append(f"{video.id}_chunk_{idx}")
+                        chunk_texts.append(chunk)
+                        chunk_metadatas.append({
+                            "roadmap_id": str(roadmap.id),
+                            "video_id": str(video.id),
+                            "module_id": str(module_id) if module_id else "",
+                            "chunk_index": idx,
+                            "source_type": "transcript"
+                        })
+                    
+                    chunk_embeddings = self.embedding_service.generate_embeddings(chunk_texts)
+                    
+                    self.vector_service.collection.upsert(
+                        ids=chunk_ids,
+                        embeddings=chunk_embeddings,
+                        documents=chunk_texts,
+                        metadatas=chunk_metadatas
+                    )
+                    logger.info("index_video: %d transcript chunks indexed successfully for video %s", len(chunks), video_id)
+
         except Exception as exc:
             logger.error("index_video: Failed to index video %s: %s", video_id, exc)
 
     def index_roadmap(self, roadmap_id: uuid.UUID, db: Session):
-        """Index all videos of a roadmap using high-performance batch embedding generation."""
+        """Index all videos and transcript chunks of a roadmap using high-performance batch embedding generation."""
         try:
             logger.info("Indexing roadmap %s in ChromaDB", roadmap_id)
             roadmap = db.query(Roadmap).filter(Roadmap.id == roadmap_id).first()
@@ -148,6 +213,10 @@ class SearchService:
                 for mv in mod.module_videos:
                     video_to_module[mv.video_id] = (mod.id, mod.name)
 
+            # 1. Clear any existing documents for this roadmap in ChromaDB
+            self.vector_service.delete_by_roadmap(str(roadmap_id))
+            logger.info("index_roadmap: Cleared existing documents in ChromaDB for roadmap %s", roadmap_id)
+
             texts_to_embed = []
             temp_items = []
 
@@ -155,6 +224,7 @@ class SearchService:
                 mod_info = video_to_module.get(video.id, (None, None))
                 mod_id, mod_name = mod_info
 
+                # Metadata/notes document
                 doc_text = self.build_knowledge_document(
                     roadmap_title=roadmap.title,
                     module_name=mod_name,
@@ -163,14 +233,32 @@ class SearchService:
                     ai_notes_json=video.ai_notes
                 )
 
+                source_type = "notes" if video.ai_notes else "metadata"
+
                 texts_to_embed.append(doc_text)
                 temp_items.append({
                     "id": str(video.id),
                     "video_id": str(video.id),
                     "roadmap_id": str(roadmap_id),
                     "module_id": str(mod_id) if mod_id else "",
+                    "source_type": source_type,
                     "content": doc_text
                 })
+
+                # Transcript chunks
+                if video.transcript_text:
+                    chunks = self.chunk_transcript(video.transcript_text)
+                    for idx, chunk in enumerate(chunks):
+                        texts_to_embed.append(chunk)
+                        temp_items.append({
+                            "id": f"{video.id}_chunk_{idx}",
+                            "video_id": str(video.id),
+                            "roadmap_id": str(roadmap_id),
+                            "module_id": str(mod_id) if mod_id else "",
+                            "chunk_index": idx,
+                            "source_type": "transcript",
+                            "content": chunk
+                        })
 
             if not texts_to_embed:
                 return
@@ -181,11 +269,17 @@ class SearchService:
             # Prep lists for bulk upsert
             ids = [item["id"] for item in temp_items]
             documents = [item["content"] for item in temp_items]
-            metadatas = [{
-                "roadmap_id": item["roadmap_id"],
-                "video_id": item["video_id"],
-                "module_id": item["module_id"]
-            } for item in temp_items]
+            metadatas = []
+            for item in temp_items:
+                meta = {
+                    "roadmap_id": item["roadmap_id"],
+                    "video_id": item["video_id"],
+                    "module_id": item["module_id"],
+                    "source_type": item["source_type"]
+                }
+                if "chunk_index" in item:
+                    meta["chunk_index"] = item["chunk_index"]
+                metadatas.append(meta)
 
             self.vector_service.upsert_documents(
                 ids=ids,
@@ -193,7 +287,7 @@ class SearchService:
                 documents=documents,
                 metadatas=metadatas
             )
-            logger.info("index_roadmap: Indexed %d videos for roadmap %s", len(ids), roadmap_id)
+            logger.info("index_roadmap: Indexed %d items (videos + chunks) for roadmap %s", len(ids), roadmap_id)
         except Exception as exc:
             logger.error("index_roadmap: Failed to index roadmap %s: %s", roadmap_id, exc)
 
@@ -225,12 +319,12 @@ class SearchService:
         # 2. Query embedding generation
         query_embedding = self.embedding_service.generate_embedding(query)
 
-        # 3. Search ChromaDB (pull double limit to support deduplication/threshold filters)
+        # 3. Search ChromaDB (pull higher limit to support deduplication/threshold filters)
         try:
             raw_results = self.vector_service.similarity_search(
                 query_embedding=query_embedding,
                 roadmap_id=str(roadmap_id),
-                limit=limit * 2
+                limit=limit * 4
             )
         except Exception as exc:
             logger.error("search: ChromaDB similarity query failed: %s", exc)
@@ -283,6 +377,32 @@ class SearchService:
             if similarity < similarity_threshold:
                 continue
 
+            # Determine source type
+            source_type = meta.get("source_type", "metadata")
+            if source_type == "transcript":
+                pass
+            elif source_type in ("metadata", "notes"):
+                # Dynamically classify notes/metadata
+                if "AI Summary:" in content:
+                    parts = content.split("AI Summary:", 1)
+                    notes_part = "AI Summary:" + parts[1]
+                    
+                    # Split query into words to look for matches
+                    words = [w for w in re.split(r'\W+', query.lower()) if len(w) > 3]
+                    matched_in_notes = False
+                    for word in words:
+                        if word in notes_part.lower():
+                            matched_in_notes = True
+                            break
+                    if matched_in_notes:
+                        source_type = "notes"
+                    else:
+                        source_type = "metadata"
+                else:
+                    source_type = "metadata"
+            else:
+                source_type = "metadata"
+
             module_name = video_to_module_name.get(vid_id)
             preview = self._get_content_preview(content, query)
 
@@ -291,7 +411,9 @@ class SearchService:
                 "video_title": video_obj.title,
                 "module_name": module_name,
                 "similarity_score": round(similarity, 2),
-                "matched_content_preview": preview
+                "matched_content_preview": preview,
+                "matched_snippet": preview,
+                "source_type": source_type
             })
 
         # Rank results
@@ -325,7 +447,6 @@ class SearchService:
             start = max(0, best_idx - 40)
             end = min(len(content_clean), start + length)
             
-            # Align window starts nicely at spaces
             if start > 0:
                 space_idx = content_clean.find(" ", start)
                 if space_idx != -1 and space_idx < best_idx:
@@ -338,7 +459,6 @@ class SearchService:
                 preview = preview + "..."
             return preview
         else:
-            # Fallback to the first part of the document
             if len(content_clean) <= length:
                 return content_clean
             return content_clean[:length] + "..."

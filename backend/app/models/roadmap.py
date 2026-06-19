@@ -25,15 +25,19 @@ if TYPE_CHECKING:
 class RoadmapStatus(str, enum.Enum):
     """
     Lifecycle states for a roadmap.
-
-    processing: YouTube API fetch in progress (spinner on frontend)
-    active:     Ready to use — all videos fetched
-    archived:   User has soft-archived; hidden from main dashboard
     """
 
     PROCESSING = "processing"
     ACTIVE = "active"
     ARCHIVED = "archived"
+
+    # New granular statuses
+    IMPORTING = "importing"
+    GENERATING_MODULES = "generating_modules"
+    GENERATING_NOTES = "generating_notes"
+    BUILDING_SEARCH_INDEX = "building_search_index"
+    READY = "ready"
+    FAILED = "failed"
 
 
 class Roadmap(Base, TimestampMixin):
@@ -98,6 +102,10 @@ class Roadmap(Base, TimestampMixin):
         Enum(RoadmapStatus, name="roadmap_status_enum"),
         default=RoadmapStatus.PROCESSING,
         nullable=False,
+    )
+    insights_json: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
     )
 
     # ── Relationships ──────────────────────────────────────────────

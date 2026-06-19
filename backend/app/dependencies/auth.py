@@ -57,7 +57,8 @@ def get_current_user(
     try:
         payload = decode_access_token(token)
         user_id: str = payload.sub
-    except JWTError:
+    except Exception as exc:
+        logger.error("JWT decoding failed: %s", exc)
         raise CredentialsException("Token is invalid or has expired.")
 
     user = db.get(User, user_id)

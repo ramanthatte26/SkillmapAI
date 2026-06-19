@@ -71,6 +71,7 @@ def seed_roadmap_data(user_id: str) -> tuple[str, list[str]]:
                 "interview_questions": ["What is stack overflow and how do you prevent it in recursion?"]
             }),
             ai_notes_status=AINotesStatus.DONE,
+            transcript_text="A queue can be implemented using two stacks. Pushing elements onto the first stack and popping from the second stack allows us to simulate FIFO queue operations using LIFO stack behavior.",
         )
 
         v2 = Video(
@@ -229,6 +230,24 @@ def run():
     })
     assert resp.status_code == 404, f"Expected 404 Not Found, got {resp.status_code}"
     print("  [Test 6] Passed (404 Not Found returned for fake roadmap).")
+
+    # 9. Test API Search for transcript concept ('queue using stack')
+    print("\n  [Test 7] Searching for transcript concept 'queue using stack'...")
+    resp = client.post("/api/v1/search", headers=headers, json={
+        "roadmap_id": roadmap_id,
+        "query": "how is a queue implemented using stack?"
+    })
+    assert resp.status_code == 200, f"Search failed: {resp.text}"
+    results = resp.json()["results"]
+    assert len(results) > 0, "No results returned"
+    first_match = results[0]
+    print(f"    Top Match: '{first_match['video_title']}' (Score: {first_match['similarity_score']})")
+    print(f"    Source Type: '{first_match['source_type']}'")
+    print(f"    Preview/Snippet: {first_match['matched_snippet']}")
+    assert first_match["video_id"] == video_ids[0], f"Expected recursion video due to transcript, got {first_match['video_title']}"
+    assert first_match["source_type"] == "transcript", f"Expected source_type 'transcript', got {first_match['source_type']}"
+    assert "queue" in first_match["matched_snippet"].lower(), "Snippet missing matched terms"
+    print("  [Test 7] Passed.")
 
     print("\n" + "=" * 60)
     print("  ALL SEMANTIC SEARCH E2E TESTS PASSED SUCCESSFULLY!")

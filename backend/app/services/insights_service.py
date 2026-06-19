@@ -121,3 +121,39 @@ class InsightsService:
         )
 
         return insights
+
+
+def run_background_insights_refresh(roadmap_id: uuid.UUID, user_id: uuid.UUID):
+    """
+    Asynchronously regenerates study insights and updates the database cache.
+    """
+    from app.database import SessionLocal
+    from app.services.insights_service import InsightsService
+    from app.models.roadmap import Roadmap
+    import json
+
+    logger.info("Starting background insights refresh for roadmap %s", roadmap_id)
+    db = SessionLocal()
+    try:
+        roadmap = db.query(Roadmap).filter(Roadmap.id == roadmap_id).first()
+        if not roadmap:
+            logger.error("Background insights: Roadmap %s not found in DB", roadmap_id)
+            return
+
+        # Generate insights
+        insights_service = InsightsService()
+        insights = insights_service.get_roadmap_insights(
+            roadmap_id=roadmap_id,
+            user_id=user_id,
+            db=db,
+        )
+
+        # Cache them
+        roadmap.insights_json = json.dumps(insights)
+        db.commit()
+        logger.info("Background insights refresh completed successfully for roadmap %s", roadmap_id)
+    except Exception as exc:
+        logger.error("Background insights refresh failed for roadmap %s: %s", roadmap_id, exc)
+    finally:
+        db.close()
+

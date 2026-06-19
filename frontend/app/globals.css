@@ -209,6 +209,7 @@ body {
 .badge-active   { background: rgba(16,185,129,0.15); color: var(--emerald-400); }
 .badge-processing { background: rgba(245,158,11,0.15); color: var(--amber-400); }
 .badge-archived { background: rgba(113,113,122,0.2);  color: var(--text-muted); }
+.badge-failed   { background: rgba(239,68,68,0.15);   color: var(--rose-400); }
 
 /* ── Skeleton loader ─────────────────────────────────────────────── */
 

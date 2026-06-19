@@ -3,29 +3,56 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
+import { useRouter } from 'next/navigation';
 import { clampPct, timeAgo } from '@/lib/utils';
 import type { RoadmapSummary } from '@/types';
-import { Play, CheckCircle2, Clock, ChevronRight } from 'lucide-react';
+import { Play, CheckCircle2, Clock, ChevronRight, MoreVertical, Trash2, ExternalLink } from 'lucide-react';
 
 interface Props {
   roadmap: RoadmapSummary;
+  onDelete: (id: string) => void;
 }
 
 const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
-  active:     { label: 'Active',      cls: 'badge-active' },
-  processing: { label: 'Processing',  cls: 'badge-processing' },
-  archived:   { label: 'Archived',    cls: 'badge-archived' },
+  active:                 { label: 'Active',                   cls: 'badge-active' },
+  processing:             { label: 'Processing',               cls: 'badge-processing' },
+  archived:               { label: 'Archived',                 cls: 'badge-archived' },
+  importing:              { label: 'Importing...',             cls: 'badge-processing' },
+  generating_modules:     { label: 'Generating Modules...',    cls: 'badge-processing' },
+  generating_notes:       { label: 'Generating Notes...',      cls: 'badge-processing' },
+  building_search_index:  { label: 'Building Search Index...', cls: 'badge-processing' },
+  ready:                  { label: 'Ready',                    cls: 'badge-active' },
+  failed:                 { label: 'Failed',                   cls: 'badge-failed' },
 };
 
-export default function RoadmapCard({ roadmap }: Props) {
+export default function RoadmapCard({ roadmap, onDelete }: Props) {
+  const router = useRouter();
   const [imgError, setImgError] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const pct = clampPct(roadmap.completion_percentage);
   const badge = STATUS_BADGE[roadmap.status] ?? STATUS_BADGE.active;
   const isComplete = pct === 100;
 
+  const toggleMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenuOpen(!menuOpen);
+  };
+
+  const handleDelete = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenuOpen(false);
+    onDelete(roadmap.id);
+  };
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    router.push(`/roadmaps/${roadmap.id}`);
+  };
+
   return (
-    <Link
-      href={`/roadmaps/${roadmap.id}`}
+    <div
+      onClick={handleCardClick}
       id={`roadmap-card-${roadmap.id}`}
       style={{ textDecoration: 'none', display: 'block' }}
     >
@@ -81,10 +108,82 @@ export default function RoadmapCard({ roadmap }: Props) {
           {/* Status + Date row */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span className={`badge ${badge.cls}`}>{badge.label}</span>
-            <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '3px' }}>
-              <Clock size={11} />
-              {timeAgo(roadmap.created_at)}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }}>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                <Clock size={11} />
+                {timeAgo(roadmap.created_at)}
+              </span>
+              
+              <button
+                onClick={toggleMenu}
+                style={{
+                  background: 'none', border: 'none', padding: '4px',
+                  cursor: 'pointer', borderRadius: '4px', display: 'flex',
+                  alignItems: 'center', justifyContent: 'center',
+                  color: 'var(--text-muted)', transition: 'color 0.2s',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
+                onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
+              >
+                <MoreVertical size={14} />
+              </button>
+
+              {menuOpen && (
+                <>
+                  {/* Backdrop to close menu */}
+                  <div
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setMenuOpen(false);
+                    }}
+                    style={{
+                      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                      zIndex: 99, background: 'transparent',
+                    }}
+                  />
+                  {/* Dropdown Menu List */}
+                  <div style={{
+                    position: 'absolute', top: '100%', right: 0, marginTop: '4px',
+                    background: 'rgba(24, 24, 27, 0.95)', backdropFilter: 'blur(8px)',
+                    border: '1px solid var(--border-strong)', borderRadius: '8px',
+                    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5)',
+                    padding: '4px', minWidth: '130px', zIndex: 100,
+                    display: 'flex', flexDirection: 'column', gap: '2px',
+                  }}>
+                    <Link
+                      href={`/roadmaps/${roadmap.id}`}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        padding: '6px 8px', borderRadius: '4px', fontSize: '0.8rem',
+                        color: 'var(--text-primary)', textDecoration: 'none',
+                        transition: 'background 0.2s',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.06)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                    >
+                      <ExternalLink size={12} />
+                      View Detail
+                    </Link>
+                    <button
+                      onClick={handleDelete}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        padding: '6px 8px', borderRadius: '4px', fontSize: '0.8rem',
+                        color: 'var(--rose-400)', background: 'none', border: 'none',
+                        width: '100%', textAlign: 'left', cursor: 'pointer',
+                        transition: 'background 0.2s',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(239,68,68,0.08)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                    >
+                      <Trash2 size={12} />
+                      Delete
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
           {/* Title */}
@@ -126,6 +225,7 @@ export default function RoadmapCard({ roadmap }: Props) {
           </div>
         </div>
       </article>
-    </Link>
+    </div>
   );
 }
+

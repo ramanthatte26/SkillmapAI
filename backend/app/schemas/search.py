@@ -21,6 +21,8 @@ class SearchResultItem(BaseModel):
     module_name: str | None = Field(default=None, description="The name of the module containing this video.")
     similarity_score: float = Field(..., description="The match confidence score (0.0 to 1.0).")
     matched_content_preview: str = Field(..., description="A snippet preview of the matching context.")
+    matched_snippet: str = Field(..., description="The snippet match of the concept context.")
+    source_type: str = Field(..., description="The source of the match: transcript, notes, or metadata.")
 
 
 class SearchResponse(BaseModel):

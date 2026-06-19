@@ -1,10 +1,12 @@
 'use client';
 
+import { useState } from 'react';
 import { useRoadmaps } from '@/hooks/useRoadmaps';
 import { useAuth } from '@/hooks/useAuth';
 import RoadmapCard from '@/components/roadmap/RoadmapCard';
 import ImportForm from '@/components/roadmap/ImportForm';
 import { BookOpen, TrendingUp, CheckCircle, Clock } from 'lucide-react';
+import { roadmapsApi } from '@/lib/api';
 
 function StatPill({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value: string | number }) {
   return (
@@ -48,6 +50,9 @@ function SkeletonCard() {
 export default function DashboardPage() {
   const { user } = useAuth();
   const { roadmaps, isLoading, error, refetch } = useRoadmaps();
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Derived stats
   const totalVideos = roadmaps.reduce((s, r) => s + r.total_videos, 0);
@@ -58,6 +63,21 @@ export default function DashboardPage() {
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+
+  const confirmDelete = async () => {
+    if (!deletingId) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await roadmapsApi.delete(deletingId);
+      await refetch();
+      setDeletingId(null);
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to delete roadmap.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '2rem 1.5rem 4rem' }}>
@@ -134,7 +154,14 @@ export default function DashboardPage() {
           aria-label="Your roadmaps"
         >
           {roadmaps.map((roadmap) => (
-            <RoadmapCard key={roadmap.id} roadmap={roadmap} />
+            <RoadmapCard
+              key={roadmap.id}
+              roadmap={roadmap}
+              onDelete={(id) => {
+                setDeletingId(id);
+                setDeleteError(null);
+              }}
+            />
           ))}
         </div>
       )}
@@ -161,6 +188,76 @@ export default function DashboardPage() {
           </p>
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingId && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(9, 9, 11, 0.8)', backdropFilter: 'blur(8px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 9999, padding: '1rem',
+        }}>
+          <div className="glass-card fade-in" style={{
+            maxWidth: '440px', width: '100%', padding: '1.75rem',
+            background: 'var(--bg-surface)', border: '1px solid var(--border-strong)',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.8)',
+            display: 'flex', flexDirection: 'column', gap: '1.25rem',
+          }}>
+            <div>
+              <h3 style={{ fontSize: '1.18rem', fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 0.5rem' }}>
+                Delete Roadmap?
+              </h3>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: 1.5, margin: 0 }}>
+                This will permanently delete this learning path, all associated videos, progress status, notes, and ChromaDB search vectors. This action cannot be undone.
+              </p>
+            </div>
+
+            {deleteError && (
+              <div style={{
+                padding: '0.75rem 1rem', borderRadius: '8px',
+                background: 'rgba(244, 63, 94, 0.08)', border: '1px solid rgba(251,113,133,0.2)',
+                color: 'var(--rose-400)', fontSize: '0.8rem',
+              }}>
+                <strong>Error:</strong> {deleteError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.25rem' }}>
+              <button
+                onClick={() => {
+                  setDeletingId(null);
+                  setDeleteError(null);
+                }}
+                disabled={isDeleting}
+                style={{
+                  background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-default)',
+                  borderRadius: '8px', padding: '0.5rem 1rem', fontSize: '0.85rem', fontWeight: 600,
+                  color: 'var(--text-primary)', cursor: 'pointer', transition: 'background 0.2s',
+                }}
+                onMouseEnter={(e) => { if (!isDeleting) e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; }}
+                onMouseLeave={(e) => { if (!isDeleting) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={isDeleting}
+                style={{
+                  background: 'var(--rose-500)', border: 'none',
+                  borderRadius: '8px', padding: '0.5rem 1rem', fontSize: '0.85rem', fontWeight: 600,
+                  color: '#fff', cursor: 'pointer', transition: 'background 0.2s',
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                }}
+                onMouseEnter={(e) => { if (!isDeleting) e.currentTarget.style.background = '#e11d48'; }}
+                onMouseLeave={(e) => { if (!isDeleting) e.currentTarget.style.background = 'var(--rose-500)'; }}
+              >
+                {isDeleting ? 'Deleting...' : 'Delete Permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

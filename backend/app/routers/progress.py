@@ -17,7 +17,7 @@ Design:
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.dependencies.auth import get_current_user
@@ -67,6 +67,7 @@ def get_progress_service() -> ProgressService:
 def update_progress(
     video_id: uuid.UUID,
     payload: ProgressUpdateRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     progress_service: ProgressService = Depends(get_progress_service),
@@ -91,6 +92,13 @@ def update_progress(
         user_id=current_user.id,
         payload=payload,
         db=db,
+    )
+
+    from app.services.insights_service import run_background_insights_refresh
+    background_tasks.add_task(
+        run_background_insights_refresh,
+        roadmap_id=result.roadmap_id,
+        user_id=current_user.id
     )
 
     logger.info(

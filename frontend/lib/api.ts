@@ -134,8 +134,10 @@ export const roadmapsApi = {
     api.post<{ modules_created: number }>(`/roadmaps/${id}/generate-modules`),
   getModules: (id: string) =>
     api.get<ModuleResponse[]>(`/roadmaps/${id}/modules`),
-  getInsights: (id: string) =>
-    api.get<RoadmapInsightsResponse>(`/roadmaps/${id}/insights`),
+  getInsights: (id: string, forceRefresh = false) =>
+    api.get<RoadmapInsightsResponse>(`/roadmaps/${id}/insights?force_refresh=${forceRefresh}`),
+  delete: (id: string) =>
+    api.delete<void>(`/roadmaps/${id}`),
 };
 
 // Progress

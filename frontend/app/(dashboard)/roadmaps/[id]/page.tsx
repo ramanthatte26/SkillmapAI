@@ -26,6 +26,182 @@ function SkeletonDetail() {
   );
 }
 
+function highlightText(text: string, query: string) {
+  if (!query || !query.trim() || !text) return <span>{text}</span>;
+  const words = query.split(/\s+/).map(w => w.replace(/[^\w]/g, '')).filter(w => w.length > 2);
+  if (words.length === 0) return <span>{text}</span>;
+  const escapedWords = words.map(w => w.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
+  const regex = new RegExp(`(${escapedWords.join('|')})`, 'gi');
+  const parts = text.split(regex);
+  return (
+    <span>
+      {parts.map((part, index) => 
+        regex.test(part) ? (
+          <mark key={index} style={{ backgroundColor: 'rgba(245, 158, 11, 0.3)', color: 'var(--amber-200)', borderRadius: '2px', padding: '0 2px' }}>
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
+    </span>
+  );
+}
+
+
+function PipelineFailed({ roadmapTitle, onGoBack }: { roadmapTitle: string; onGoBack: () => void }) {
+  return (
+    <div style={{ maxWidth: '540px', margin: '4rem auto', padding: '0 1.5rem' }}>
+      <button
+        onClick={onGoBack}
+        className="btn-secondary"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', marginBottom: '2rem' }}
+      >
+        <ArrowLeft size={15} /> Back to Dashboard
+      </button>
+
+      <div className="glass-card fade-in" style={{
+        padding: '2.5rem 2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem',
+        border: '1px solid rgba(239, 68, 68, 0.2)', background: 'rgba(239, 68, 68, 0.02)',
+        textAlign: 'center', alignItems: 'center'
+      }}>
+        <div style={{
+          width: '48px', height: '48px', borderRadius: '50%',
+          background: 'rgba(239, 68, 68, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: 'var(--rose-400)',
+        }}>
+          <AlertCircle size={24} />
+        </div>
+        <div>
+          <h2 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 0.5rem' }}>
+            Roadmap Generation Failed
+          </h2>
+          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            We encountered an issue while generating modules, notes, or search vectors for <strong>{roadmapTitle}</strong>. This could be due to API limit restrictions, video access restrictions, or server overload.
+          </p>
+        </div>
+        <button
+          onClick={onGoBack}
+          className="btn-primary"
+          style={{ marginTop: '0.5rem' }}
+        >
+          Return to Dashboard
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
+function PipelineChecklist({ status, roadmapTitle, onGoBack }: { status: string; roadmapTitle: string; onGoBack: () => void }) {
+  const steps = [
+    {
+      key: 'importing',
+      label: 'Ingesting Playlist Videos & Transcripts',
+      description: 'Fetching video metadata and grabbing available captions.',
+      isDone: ['generating_modules', 'generating_notes', 'building_search_index', 'ready'].includes(status),
+      isActive: ['importing', 'processing'].includes(status),
+    },
+    {
+      key: 'modules',
+      label: 'Structuring Learning Modules',
+      description: 'Grouping related concepts into logical chapters using AI.',
+      isDone: ['generating_notes', 'building_search_index', 'ready'].includes(status),
+      isActive: status === 'generating_modules',
+    },
+    {
+      key: 'notes',
+      label: 'Generating AI Video Notes',
+      description: 'Summarizing key topics, terms, and interview questions.',
+      isDone: ['building_search_index', 'ready'].includes(status),
+      isActive: status === 'generating_notes',
+    },
+    {
+      key: 'index',
+      label: 'Building Transcript Search Index',
+      description: 'Mapping transcripts to the database for transcript-aware search.',
+      isDone: status === 'ready',
+      isActive: status === 'building_search_index',
+    },
+  ];
+
+  return (
+    <div style={{ maxWidth: '540px', margin: '4rem auto', padding: '0 1.5rem' }}>
+      <button
+        onClick={onGoBack}
+        className="btn-secondary"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', marginBottom: '2rem' }}
+      >
+        <ArrowLeft size={15} /> Back to Dashboard
+      </button>
+
+      <div className="glass-card fade-in" style={{ padding: '2.25rem 2rem', display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
+        <div>
+          <span className="badge badge-processing" style={{ marginBottom: '0.75rem' }}>Generating Roadmap</span>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 0.5rem', lineHeight: 1.35 }}>
+            {roadmapTitle}
+          </h2>
+          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            We are constructing your personalized study guide. This might take a minute depending on the size of the playlist. Feel free to leave this page and check back later.
+          </p>
+        </div>
+
+        {/* Progress Line/Checklist */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', position: 'relative', paddingLeft: '0.5rem' }}>
+          {steps.map((step, idx) => {
+            const state = step.isDone ? 'done' : step.isActive ? 'active' : 'pending';
+            return (
+              <div key={step.key} style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+                {/* Indicator Node */}
+                <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <div style={{
+                    width: '24px', height: '24px', borderRadius: '50%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: state === 'done' ? 'rgba(16,185,129,0.15)' : state === 'active' ? 'rgba(245,158,11,0.15)' : 'rgba(255,255,255,0.02)',
+                    border: `1.5px solid ${state === 'done' ? 'var(--emerald-400)' : state === 'active' ? 'var(--amber-400)' : 'var(--border-default)'}`,
+                    color: state === 'done' ? 'var(--emerald-400)' : state === 'active' ? 'var(--amber-400)' : 'var(--text-muted)',
+                    fontSize: '0.75rem', fontWeight: 600, flexShrink: 0, zIndex: 2,
+                  }}>
+                    {state === 'done' ? <Check size={12} strokeWidth={3} /> : idx + 1}
+                  </div>
+                  {idx < steps.length - 1 && (
+                    <div style={{
+                      position: 'absolute', top: '24px', bottom: '-24px', width: '2px',
+                      background: step.isDone ? 'var(--emerald-500)' : 'var(--border-subtle)',
+                      zIndex: 1,
+                    }} />
+                  )}
+                </div>
+
+                {/* Text Details */}
+                <div style={{ flex: 1, paddingTop: '1px' }}>
+                  <h4 style={{
+                    margin: '0 0 2px', fontSize: '0.9rem', fontWeight: 600,
+                    color: state === 'done' ? 'var(--emerald-400)' : state === 'active' ? 'var(--text-primary)' : 'var(--text-muted)',
+                  }}>
+                    {step.label}
+                    {state === 'active' && (
+                      <span style={{
+                        display: 'inline-block', width: '6px', height: '6px',
+                        borderRadius: '50%', background: 'var(--amber-400)',
+                        marginLeft: '8px', animation: 'ping 1s infinite alternate',
+                      }} />
+                    )}
+                  </h4>
+                  <p style={{ margin: 0, fontSize: '0.78rem', color: state === 'pending' ? 'var(--text-muted)' : 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    {step.description}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 export default function RoadmapDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -59,10 +235,10 @@ export default function RoadmapDetailPage() {
   const [videoNotesCache, setVideoNotesCache] = useState<Record<string, VideoNotesResponse>>({});
 
   // Fetch insights helper
-  const fetchInsights = useCallback((roadmapId: string) => {
+  const fetchInsights = useCallback((roadmapId: string, forceRefresh = false) => {
     setIsLoadingInsights(true);
     setInsightsError('');
-    roadmapsApi.getInsights(roadmapId)
+    roadmapsApi.getInsights(roadmapId, forceRefresh)
       .then((data) => {
         setInsights(data);
       })
@@ -73,23 +249,9 @@ export default function RoadmapDetailPage() {
       .finally(() => setIsLoadingInsights(false));
   }, []);
 
-  // Fetch roadmap detail and modules
-  useEffect(() => {
-    if (!id) return;
-    Promise.resolve().then(() => {
-      setIsLoading(true);
-    });
-
-    const roadmapPromise = roadmapsApi.get(id)
-      .then((data) => {
-        setRoadmap(data);
-        const completed = new Set(
-          data.videos.filter((v) => v.is_completed).map((v) => v.id)
-        );
-        setCompletedIds(completed);
-      });
-
-    const modulesPromise = roadmapsApi.getModules(id)
+  // Fetch modules helper
+  const fetchModules = useCallback((roadmapId: string) => {
+    return roadmapsApi.getModules(roadmapId)
       .then((data) => {
         setModules(data);
         setOpenModuleIds(new Set(data.map((m) => m.id)));
@@ -97,14 +259,75 @@ export default function RoadmapDetailPage() {
       .catch((err) => {
         console.error('Failed to load modules:', err);
       });
+  }, []);
 
-    // Fetch insights independently so it does not block the UI
-    fetchInsights(id);
+  // Fetch roadmap detail and modules
+  useEffect(() => {
+    if (!id) return;
+    setIsLoading(true);
 
-    Promise.all([roadmapPromise, modulesPromise])
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load roadmap'))
-      .finally(() => setIsLoading(false));
-  }, [id, fetchInsights]);
+    roadmapsApi.get(id)
+      .then((data) => {
+        setRoadmap(data);
+        const completed = new Set(
+          data.videos.filter((v) => v.is_completed).map((v) => v.id)
+        );
+        setCompletedIds(completed);
+
+        // If the roadmap is ready or active, fetch modules and insights
+        if (data.status === 'ready' || data.status === 'active') {
+          Promise.all([
+            fetchModules(id),
+            fetchInsights(id)
+          ]).finally(() => {
+            setIsLoading(false);
+          });
+        } else {
+          setIsLoading(false);
+        }
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to load roadmap');
+        setIsLoading(false);
+      });
+  }, [id, fetchInsights, fetchModules]);
+
+  // Polling logic when roadmap status is processing/importing etc.
+  useEffect(() => {
+    if (!id || !roadmap) return;
+    
+    const isProcessing = [
+      'processing',
+      'importing',
+      'generating_modules',
+      'generating_notes',
+      'building_search_index'
+    ].includes(roadmap.status);
+
+    if (!isProcessing) return;
+
+    let pollInterval = setInterval(() => {
+      roadmapsApi.get(id)
+        .then((data) => {
+          setRoadmap(data);
+          const completed = new Set(
+            data.videos.filter((v) => v.is_completed).map((v) => v.id)
+          );
+          setCompletedIds(completed);
+
+          // If transition to ready/active, fetch modules and insights
+          if (data.status === 'ready' || data.status === 'active') {
+            fetchModules(id);
+            fetchInsights(id);
+          }
+        })
+        .catch((err) => {
+          console.error('Polling error:', err);
+        });
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
+  }, [id, roadmap?.status, fetchModules, fetchInsights]);
 
   // Toggle video completion
   const handleToggle = useCallback(async (videoId: string, completed: boolean) => {
@@ -294,6 +517,22 @@ export default function RoadmapDetailPage() {
     );
   }
 
+  if (roadmap.status === 'failed') {
+    return <PipelineFailed roadmapTitle={roadmap.title} onGoBack={() => router.push('/dashboard')} />;
+  }
+
+  const isProcessing = [
+    'processing',
+    'importing',
+    'generating_modules',
+    'generating_notes',
+    'building_search_index'
+  ].includes(roadmap.status);
+
+  if (isProcessing) {
+    return <PipelineChecklist status={roadmap.status} roadmapTitle={roadmap.title} onGoBack={() => router.push('/dashboard')} />;
+  }
+
   const pct = clampPct(roadmap.completion_percentage);
   const completedCount = roadmap.completed_videos;
   const isFullyDone = pct === 100;
@@ -421,7 +660,7 @@ export default function RoadmapDetailPage() {
           </div>
           
           <button
-            onClick={() => fetchInsights(id)}
+            onClick={() => fetchInsights(id, true)}
             disabled={isLoadingInsights}
             className="btn-secondary"
             style={{
@@ -864,9 +1103,19 @@ export default function RoadmapDetailPage() {
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
-                            <span style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--amber-400)', background: 'rgba(245,158,11,0.08)', padding: '2px 6px', borderRadius: '4px' }}>
-                              Video Match
-                            </span>
+                            {result.source_type === 'transcript' ? (
+                              <span style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--sky-400)', background: 'rgba(56,189,248,0.08)', padding: '2px 6px', borderRadius: '4px' }}>
+                                Transcript Match
+                              </span>
+                            ) : result.source_type === 'notes' ? (
+                              <span style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--amber-400)', background: 'rgba(245,158,11,0.08)', padding: '2px 6px', borderRadius: '4px' }}>
+                                Notes Match
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--teal-400)', background: 'rgba(20,184,166,0.08)', padding: '2px 6px', borderRadius: '4px' }}>
+                                Metadata Match
+                              </span>
+                            )}
                             {result.module_name && (
                               <span style={{ fontSize: '0.7rem', fontWeight: 500, color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
                                 • Module: {result.module_name}
@@ -902,9 +1151,15 @@ export default function RoadmapDetailPage() {
                           background: 'rgba(0,0,0,0.15)',
                           padding: '0.75rem 1rem',
                           borderRadius: '8px',
-                          borderLeft: '3px solid var(--amber-400)',
+                          borderLeft: `3px solid ${
+                            result.source_type === 'transcript'
+                              ? 'var(--sky-400)'
+                              : result.source_type === 'notes'
+                              ? 'var(--amber-400)'
+                              : 'var(--teal-400)'
+                          }`,
                         }}>
-                          {result.matched_content_preview}
+                          {highlightText(result.matched_content_preview, searchQuery)}
                         </div>
                       )}
 

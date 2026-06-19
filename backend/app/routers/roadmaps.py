@@ -17,7 +17,7 @@ Design:
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.dependencies.auth import get_current_user
@@ -86,6 +86,7 @@ def get_insights_service() -> InsightsService:
 )
 def import_playlist(
     payload: PlaylistImportRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     youtube_service: YouTubeService = Depends(get_youtube_service),
@@ -99,9 +100,16 @@ def import_playlist(
         db=db,
     )
 
+    from app.services.youtube_service import run_background_pipeline
+    background_tasks.add_task(
+        run_background_pipeline,
+        roadmap_id=result.roadmap_id,
+        user_id=current_user.id
+    )
+
     logger.info(
-        "Import complete: roadmap_id=%s title=%r total_videos=%d",
-        result.roadmap_id, result.title, result.total_videos,
+        "Import started: roadmap_id=%s title=%r",
+        result.roadmap_id, result.title,
     )
     return result
 
@@ -198,6 +206,40 @@ def get_roadmap(
 
 
 # ─────────────────────────────────────────────────────────────────
+# DELETE /roadmaps/{roadmap_id}
+# ─────────────────────────────────────────────────────────────────
+@router.delete(
+    "/{roadmap_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a roadmap and all associated resources",
+    description=(
+        "Deletes the roadmap, its videos, progress records, modules, "
+        "and removes all corresponding vector embeddings from ChromaDB. "
+        "Only the owner can delete a roadmap."
+    ),
+    responses={
+        204: {"description": "Roadmap deleted successfully."},
+        401: {"description": "Not authenticated."},
+        403: {"description": "Roadmap belongs to a different user."},
+        404: {"description": "Roadmap not found."},
+    },
+)
+def delete_roadmap(
+    roadmap_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    roadmap_service: RoadmapService = Depends(get_roadmap_service),
+) -> None:
+    """Deletes a roadmap and its associated vectors and database records."""
+    logger.info("User %s requested deletion of roadmap %s", current_user.id, roadmap_id)
+    roadmap_service.delete_roadmap(
+        roadmap_id=roadmap_id,
+        user_id=current_user.id,
+        db=db,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
 # POST /roadmaps/{roadmap_id}/generate-modules
 # ─────────────────────────────────────────────────────────────────
 @router.post(
@@ -289,18 +331,41 @@ def get_roadmap_modules(
 )
 def get_roadmap_insights(
     roadmap_id: uuid.UUID,
+    force_refresh: bool = Query(default=False, description="Force refresh the cached insights."),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     insights_service: InsightsService = Depends(get_insights_service),
 ) -> RoadmapInsightsResponse:
     """Fetch learning insights for a single roadmap."""
     logger.info(
-        "User %s fetching insights for roadmap %s",
+        "User %s fetching insights for roadmap %s (force_refresh=%s)",
         current_user.id,
         roadmap_id,
+        force_refresh,
     )
-    return insights_service.get_roadmap_insights(
+    from app.models.roadmap import Roadmap
+    from app.utils.exceptions import ForbiddenException, NotFoundException
+    import json
+
+    roadmap = db.query(Roadmap).filter(Roadmap.id == roadmap_id).first()
+    if not roadmap:
+        raise NotFoundException("Roadmap")
+    if roadmap.user_id != current_user.id:
+        raise ForbiddenException("You do not have permission to access this roadmap.")
+
+    if not force_refresh and roadmap.insights_json:
+        try:
+            return json.loads(roadmap.insights_json)
+        except Exception as exc:
+            logger.warning("Failed to decode cached insights: %s. Regenerating.", exc)
+
+    insights = insights_service.get_roadmap_insights(
         roadmap_id=roadmap_id,
         user_id=current_user.id,
         db=db,
     )
+
+    roadmap.insights_json = json.dumps(insights)
+    db.commit()
+
+    return insights
