@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     youtube_api_key: str = ""
     openrouter_api_key: str = ""
     openrouter_model: str = "deepseek/deepseek-chat"
+    chroma_db_dir: str = "chroma_db"
 
     # ── Pydantic-settings config ────────────────────────────────────
     model_config = SettingsConfigDict(

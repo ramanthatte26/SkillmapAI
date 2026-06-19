@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import auth, roadmaps, progress, videos
+from app.routers import auth, roadmaps, progress, videos, search
 
 settings = get_settings()
 
@@ -105,6 +105,7 @@ app.include_router(auth.router, prefix=API_PREFIX)
 app.include_router(roadmaps.router, prefix=API_PREFIX)
 app.include_router(progress.router, prefix=API_PREFIX)
 app.include_router(videos.router, prefix=API_PREFIX)
+app.include_router(search.router, prefix=API_PREFIX)
 
 # Future routers (uncomment as implemented):
 # from app.routers import users

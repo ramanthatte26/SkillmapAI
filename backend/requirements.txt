@@ -30,3 +30,7 @@ python-dotenv==1.0.1
 # Testing
 pytest==8.3.4
 pytest-asyncio==0.24.0
+
+# Vector Database & Embeddings
+chromadb==0.5.3
+sentence-transformers==3.0.1

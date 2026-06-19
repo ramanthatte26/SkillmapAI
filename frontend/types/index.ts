@@ -155,3 +155,17 @@ export interface VideoNotesResponse {
   important_terms: string[];
   interview_questions: string[];
 }
+
+// ── Search ────────────────────────────────────────────────────────
+
+export interface SearchResult {
+  video_id: string;
+  video_title: string;
+  module_name: string | null;
+  similarity_score: number;
+  matched_content_preview: string;
+}
+
+export interface SearchResponse {
+  results: SearchResult[];
+}

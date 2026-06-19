@@ -172,6 +172,13 @@ def generate_video_notes(
             roadmap.id,
         )
 
+        # Trigger semantic indexing to update index with the generated notes
+        try:
+            from app.services.search_service import SearchService
+            SearchService().index_video(video.id, db)
+        except Exception as exc:
+            logger.error("Failed to run search indexing for video %s after note generation: %s", video.id, exc)
+
         return VideoNotesResponse(
             video_id=video.id,
             ai_notes_status=video.ai_notes_status.value,

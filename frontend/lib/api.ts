@@ -110,6 +110,7 @@ import type {
   ModuleResponse,
   RoadmapInsightsResponse,
   VideoNotesResponse,
+  SearchResult,
 } from '@/types';
 
 // Auth
@@ -151,4 +152,10 @@ export const videosApi = {
     api.post<VideoNotesResponse>(`/videos/${videoId}/generate-notes`),
   getNotes: (videoId: string) =>
     api.get<VideoNotesResponse>(`/videos/${videoId}/notes`),
+};
+
+// Search
+export const searchApi = {
+  search: (data: { roadmap_id: string; query: string }) =>
+    api.post<{ results: SearchResult[] }>('/search', data),
 };

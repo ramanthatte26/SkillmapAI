@@ -113,6 +113,14 @@ class ModuleService:
                 len(healed_modules),
                 roadmap_id,
             )
+
+            # Trigger semantic re-indexing to include new module associations
+            try:
+                from app.services.search_service import SearchService
+                SearchService().index_roadmap(roadmap_id, db)
+            except Exception as exc:
+                logger.error("Failed to run search re-indexing for roadmap %s after module generation: %s", roadmap_id, exc)
+
             return len(healed_modules)
 
         except Exception as exc:

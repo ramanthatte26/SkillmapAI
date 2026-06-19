@@ -3,10 +3,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { roadmapsApi, progressApi, videosApi } from '@/lib/api';
+import { roadmapsApi, progressApi, videosApi, searchApi } from '@/lib/api';
 import VideoItem from '@/components/roadmap/VideoItem';
 import { clampPct, formatDate } from '@/lib/utils';
-import type { RoadmapDetailResponse, ModuleResponse, RoadmapInsightsResponse, VideoNotesResponse } from '@/types';
+import type { RoadmapDetailResponse, ModuleResponse, RoadmapInsightsResponse, VideoNotesResponse, SearchResult } from '@/types';
 import {
   ArrowLeft, ExternalLink, Play, CheckCircle2,
   Video, BarChart3, Calendar, Sparkles, ChevronDown, ChevronUp,
@@ -41,11 +41,18 @@ export default function RoadmapDetailPage() {
   const [modules, setModules] = useState<ModuleResponse[]>([]);
   const [isGeneratingModules, setIsGeneratingModules] = useState(false);
   const [openModuleIds, setOpenModuleIds] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<'modules' | 'list'>('modules');
+  const [activeTab, setActiveTab] = useState<'modules' | 'list' | 'search'>('modules');
 
   const [insights, setInsights] = useState<RoadmapInsightsResponse | null>(null);
   const [isLoadingInsights, setIsLoadingInsights] = useState(false);
   const [insightsError, setInsightsError] = useState('');
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [hasSearched, setHasSearched] = useState(false);
 
   // Notes state: Set of videoIds currently being generated, and a cache of returned notes
   const [generatingNotes, setGeneratingNotes] = useState<Set<string>>(new Set());
@@ -148,6 +155,29 @@ export default function RoadmapDetailPage() {
       setIsGeneratingModules(false);
     }
   }, [id, fetchInsights]);
+
+  // Semantic search query handler
+  const handleSearch = useCallback(async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!searchQuery.trim()) return;
+
+    setIsSearching(true);
+    setSearchError('');
+    setHasSearched(true);
+
+    try {
+      const data = await searchApi.search({
+        roadmap_id: id,
+        query: searchQuery,
+      });
+      setSearchResults(data.results);
+    } catch (err) {
+      console.error('Failed to perform search:', err);
+      setSearchError(err instanceof Error ? err.message : 'Search failed. Please try again.');
+    } finally {
+      setIsSearching(false);
+    }
+  }, [id, searchQuery]);
 
   // Generate AI notes for a single video
   const handleGenerateNotes = useCallback(async (videoId: string): Promise<VideoNotesResponse | null> => {
@@ -572,11 +602,11 @@ export default function RoadmapDetailPage() {
         {/* Section Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <h2 style={{ fontSize: '1.0625rem', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
-            {modules.length > 0 && activeTab === 'modules' ? 'Learning Modules' : `Videos (${roadmap.videos.length})`}
+            {activeTab === 'modules' && modules.length > 0 ? 'Learning Modules' : activeTab === 'search' ? 'Semantic Knowledge Search' : `Videos (${roadmap.videos.length})`}
           </h2>
           
-          {modules.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {modules.length > 0 && activeTab === 'modules' && (
               <button
                 onClick={handleGenerateModules}
                 disabled={isGeneratingModules}
@@ -593,15 +623,17 @@ export default function RoadmapDetailPage() {
               >
                 <Sparkles size={13} /> {isGeneratingModules ? 'Regenerating...' : 'Regenerate'}
               </button>
-              
-              <div style={{
-                display: 'flex',
-                gap: '2px',
-                background: 'rgba(255,255,255,0.03)',
-                padding: '3px',
-                borderRadius: '8px',
-                border: '1px solid var(--border-subtle)'
-              }}>
+            )}
+            
+            <div style={{
+              display: 'flex',
+              gap: '2px',
+              background: 'rgba(255,255,255,0.03)',
+              padding: '3px',
+              borderRadius: '8px',
+              border: '1px solid var(--border-subtle)'
+            }}>
+              {modules.length > 0 && (
                 <button
                   onClick={() => setActiveTab('modules')}
                   style={{
@@ -618,29 +650,46 @@ export default function RoadmapDetailPage() {
                 >
                   Modules
                 </button>
-                <button
-                  onClick={() => setActiveTab('list')}
-                  style={{
-                    border: 'none',
-                    padding: '4px 12px',
-                    borderRadius: '6px',
-                    fontSize: '0.78rem',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    background: activeTab === 'list' ? 'rgba(245,158,11,0.12)' : 'transparent',
-                    color: activeTab === 'list' ? 'var(--amber-400)' : 'var(--text-muted)',
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  All Videos
-                </button>
-              </div>
+              )}
+              <button
+                onClick={() => setActiveTab('list')}
+                style={{
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '6px',
+                  fontSize: '0.78rem',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  background: activeTab === 'list' ? 'rgba(245,158,11,0.12)' : 'transparent',
+                  color: activeTab === 'list' ? 'var(--amber-400)' : 'var(--text-muted)',
+                  transition: 'all 0.2s',
+                }}
+              >
+                All Videos
+              </button>
+              <button
+                onClick={() => setActiveTab('search')}
+                style={{
+                  border: 'none',
+                  padding: '4px 12px',
+                  borderRadius: '6px',
+                  fontSize: '0.78rem',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  background: activeTab === 'search' ? 'rgba(245,158,11,0.12)' : 'transparent',
+                  color: activeTab === 'search' ? 'var(--amber-400)' : 'var(--text-muted)',
+                  transition: 'all 0.2s',
+                }}
+              >
+                Search
+              </button>
             </div>
-          )}
+          </div>
         </div>
 
         {/* Content View */}
-        {modules.length > 0 && activeTab === 'modules' ? (
+        {/* Content View */}
+        {activeTab === 'modules' && modules.length > 0 ? (
           /* Modules Collapsible Cards View */
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {modules.map((mod) => {
@@ -726,6 +775,183 @@ export default function RoadmapDetailPage() {
                 </div>
               );
             })}
+          </div>
+        ) : activeTab === 'search' ? (
+          /* Semantic Search Section */
+          <div className="glass-card fade-in" style={{ padding: '1.75rem 2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
+                Semantic Roadmap Search
+              </h3>
+              <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
+                Find concepts, topics, and interview questions across this roadmap. Enter a query in natural language like <i>"Where was recursion explained?"</i> or <i>"constructors in Python"</i>.
+              </p>
+            </div>
+
+            <form onSubmit={handleSearch} style={{ display: 'flex', gap: '0.75rem' }}>
+              <input
+                id="search-query-input"
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search concepts, libraries, topics, or terms..."
+                className="input-field"
+                style={{ flex: 1, height: '42px' }}
+                disabled={isSearching}
+              />
+              <button
+                id="search-query-button"
+                type="submit"
+                className="btn-primary"
+                style={{ height: '42px', padding: '0 1.5rem', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                disabled={isSearching || !searchQuery.trim()}
+              >
+                {isSearching ? 'Searching...' : 'Search'}
+              </button>
+            </form>
+
+            {searchError && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.625rem',
+                padding: '0.75rem 1rem',
+                background: 'rgba(239, 68, 68, 0.08)',
+                border: '1px solid rgba(239, 68, 68, 0.2)',
+                borderRadius: '8px',
+                color: 'var(--red-400)',
+                fontSize: '0.825rem'
+              }}>
+                <AlertCircle size={16} />
+                <span>{searchError}</span>
+              </div>
+            )}
+
+            {isSearching ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '3rem 0', gap: '1rem' }}>
+                <div style={{ border: '2px solid rgba(255,255,255,0.05)', borderTop: '2px solid var(--amber-400)', borderRadius: '50%', width: '28px', height: '28px', animation: 'spin 0.8s linear infinite' }} />
+                <span style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>Searching roadmap knowledge...</span>
+              </div>
+            ) : hasSearched ? (
+              searchResults.length === 0 ? (
+                /* Empty state */
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '3.5rem 0', gap: '0.75rem', textAlign: 'center' }}>
+                  <AlertCircle size={32} style={{ color: 'var(--text-muted)' }} />
+                  <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>No matches found</div>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0, maxWidth: '280px' }}>
+                    Try searching with different terms or check if notes have been generated for videos.
+                  </p>
+                </div>
+              ) : (
+                /* Results List */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
+                    Found {searchResults.length} relevant match{searchResults.length > 1 ? 'es' : ''}
+                  </div>
+                  {searchResults.map((result) => (
+                    <div
+                      key={result.video_id}
+                      className="glass-card"
+                      style={{
+                        padding: '1.25rem 1.5rem',
+                        transition: 'border-color 0.2s',
+                        border: '1px solid var(--border-subtle)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.75rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--amber-400)', background: 'rgba(245,158,11,0.08)', padding: '2px 6px', borderRadius: '4px' }}>
+                              Video Match
+                            </span>
+                            {result.module_name && (
+                              <span style={{ fontSize: '0.7rem', fontWeight: 500, color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                • Module: {result.module_name}
+                              </span>
+                            )}
+                          </div>
+                          <h4 style={{ fontSize: '0.925rem', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
+                            {result.video_title}
+                          </h4>
+                        </div>
+                        <div style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          background: 'rgba(16,185,129,0.08)',
+                          color: 'var(--emerald-400)',
+                          padding: '3px 8px',
+                          borderRadius: '6px',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          flexShrink: 0
+                        }}>
+                          <Brain size={12} />
+                          Match: {Math.round(result.similarity_score * 100)}%
+                        </div>
+                      </div>
+
+                      {result.matched_content_preview && (
+                        <div style={{
+                          fontSize: '0.825rem',
+                          color: 'var(--text-secondary)',
+                          lineHeight: 1.5,
+                          background: 'rgba(0,0,0,0.15)',
+                          padding: '0.75rem 1rem',
+                          borderRadius: '8px',
+                          borderLeft: '3px solid var(--amber-400)',
+                        }}>
+                          {result.matched_content_preview}
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+                        <button
+                          onClick={() => {
+                            setActiveTab('list');
+                            setTimeout(() => {
+                              const el = document.getElementById(`video-item-${result.video_id}`);
+                              if (el) {
+                                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                const prevBorderColor = el.style.borderColor;
+                                const prevBoxShadow = el.style.boxShadow;
+                                el.style.borderColor = 'var(--amber-400)';
+                                el.style.boxShadow = '0 0 12px rgba(245, 158, 11, 0.2)';
+                                setTimeout(() => {
+                                  el.style.borderColor = prevBorderColor;
+                                  el.style.boxShadow = prevBoxShadow;
+                                }, 3000);
+                              }
+                            }, 100);
+                          }}
+                          className="btn-secondary"
+                          style={{
+                            padding: '4px 10px',
+                            fontSize: '0.78rem',
+                            borderRadius: '6px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.375rem',
+                            height: '28px',
+                          }}
+                        >
+                          <Play size={12} /> Go to Video
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : (
+              /* Initial state before search */
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '2.5rem 0', gap: '0.5rem', color: 'var(--text-muted)' }}>
+                <Brain size={24} style={{ opacity: 0.5, marginBottom: '0.5rem' }} />
+                <span style={{ fontSize: '0.8rem' }}>Enter a query above to search inside this roadmap.</span>
+              </div>
+            )}
           </div>
         ) : (
           /* Flat Videos List View */

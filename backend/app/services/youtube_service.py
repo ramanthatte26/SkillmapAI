@@ -165,6 +165,13 @@ class YouTubeService:
         db.refresh(roadmap)
         logger.info("Import complete for roadmap_id=%s", roadmap.id)
 
+        # Trigger semantic indexing
+        try:
+            from app.services.search_service import SearchService
+            SearchService().index_roadmap(roadmap.id, db)
+        except Exception as exc:
+            logger.error("Failed to run search indexing for roadmap %s on import: %s", roadmap.id, exc)
+
         # Step 7 — Return response
         return RoadmapImportResponse(
             roadmap_id=roadmap.id,
