@@ -16,6 +16,7 @@ Docs available at:
     http://localhost:8000/redoc     (ReDoc)
 """
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
@@ -23,9 +24,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import auth
+from app.routers import auth, roadmaps, progress, videos
 
 settings = get_settings()
+
+# ── Logging ───────────────────────────────────────────────────────
+# Configure logging once at module level so all app.* loggers
+# inherit this configuration. In production, swap StreamHandler
+# for a structured JSON logger (e.g. python-json-logger).
+logging.basicConfig(
+    level=logging.DEBUG if settings.debug else logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
 # ── Lifespan ──────────────────────────────────────────────────────
@@ -76,6 +88,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     Catch-all for any unhandled exceptions — returns a generic 500.
     In production, this prevents stack traces from leaking to the client.
     """
+    logger.exception("Unhandled exception in API request: %s", exc)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
@@ -84,17 +97,18 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
+
 # ── API Routers ───────────────────────────────────────────────────
 API_PREFIX = "/api/v1"
 
 app.include_router(auth.router, prefix=API_PREFIX)
+app.include_router(roadmaps.router, prefix=API_PREFIX)
+app.include_router(progress.router, prefix=API_PREFIX)
+app.include_router(videos.router, prefix=API_PREFIX)
 
 # Future routers (uncomment as implemented):
-# from app.routers import users, roadmaps, videos, progress
+# from app.routers import users
 # app.include_router(users.router, prefix=API_PREFIX)
-# app.include_router(roadmaps.router, prefix=API_PREFIX)
-# app.include_router(videos.router, prefix=API_PREFIX)
-# app.include_router(progress.router, prefix=API_PREFIX)
 
 
 # ── Health Check ──────────────────────────────────────────────────

@@ -14,6 +14,7 @@ from app.models.user import User
 from app.models.roadmap import Roadmap, RoadmapStatus
 from app.models.video import Video, AINotesStatus
 from app.models.progress import VideoProgress
+from app.models.module import Module, ModuleVideo
 
 __all__ = [
     "Base",
@@ -24,4 +25,6 @@ __all__ = [
     "Video",
     "AINotesStatus",
     "VideoProgress",
+    "Module",
+    "ModuleVideo",
 ]

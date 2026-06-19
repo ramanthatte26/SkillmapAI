@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from app.models.user import User
     from app.models.video import Video
     from app.models.progress import VideoProgress
+    from app.models.module import Module
 
 
 class RoadmapStatus(str, enum.Enum):
@@ -115,6 +116,13 @@ class Roadmap(Base, TimestampMixin):
         "VideoProgress",
         back_populates="roadmap",
         cascade="all, delete-orphan",
+        lazy="select",
+    )
+    modules: Mapped[list["Module"]] = relationship(
+        "Module",
+        back_populates="roadmap",
+        cascade="all, delete-orphan",
+        order_by="Module.position",
         lazy="select",
     )
 

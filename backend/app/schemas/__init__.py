@@ -15,6 +15,18 @@ from app.schemas.user import (
     UserUpdate,
     UserWithToken,
 )
+from app.schemas.roadmap import (
+    PlaylistImportRequest,
+    RoadmapImportResponse,
+    VideoResponse,
+    RoadmapDetailResponse,
+    RoadmapSummary,
+)
+from app.schemas.progress import (
+    ProgressUpdateRequest,
+    ProgressResponse,
+    ProgressStatsResponse,
+)
 
 __all__ = [
     "RegisterRequest",
@@ -25,4 +37,13 @@ __all__ = [
     "UserResponse",
     "UserUpdate",
     "UserWithToken",
+    "PlaylistImportRequest",
+    "RoadmapImportResponse",
+    "VideoResponse",
+    "RoadmapDetailResponse",
+    "RoadmapSummary",
+    "ProgressUpdateRequest",
+    "ProgressResponse",
+    "ProgressStatsResponse",
 ]
+

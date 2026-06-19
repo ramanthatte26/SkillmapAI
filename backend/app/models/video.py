@@ -19,6 +19,7 @@ from app.models.base import Base, TimestampMixin
 if TYPE_CHECKING:
     from app.models.roadmap import Roadmap
     from app.models.progress import VideoProgress
+    from app.models.module import ModuleVideo
 
 
 class AINotesStatus(str, enum.Enum):
@@ -105,6 +106,12 @@ class Video(Base, TimestampMixin):
     )
     progress: Mapped[list["VideoProgress"]] = relationship(
         "VideoProgress",
+        back_populates="video",
+        cascade="all, delete-orphan",
+        lazy="select",
+    )
+    module_videos: Mapped[list["ModuleVideo"]] = relationship(
+        "ModuleVideo",
         back_populates="video",
         cascade="all, delete-orphan",
         lazy="select",

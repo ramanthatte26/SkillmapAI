@@ -38,7 +38,8 @@ class Settings(BaseSettings):
 
     # ── External APIs (populated later) ────────────────────────────
     youtube_api_key: str = ""
-    google_api_key: str = ""
+    openrouter_api_key: str = ""
+    openrouter_model: str = "deepseek/deepseek-chat"
 
     # ── Pydantic-settings config ────────────────────────────────────
     model_config = SettingsConfigDict(
