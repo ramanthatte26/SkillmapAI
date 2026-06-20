@@ -68,9 +68,11 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         """Return allowed CORS origins based on environment."""
         origins = [self.frontend_url]
-        if not self.is_production:
-            origins.append("http://localhost:3000")
+        for url in ["http://localhost:3000", "http://localhost:5173"]:
+            if url not in origins:
+                origins.append(url)
         return origins
+
 
 
 @lru_cache
