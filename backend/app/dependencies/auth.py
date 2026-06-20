@@ -20,6 +20,7 @@ automatically returns a 401 Unauthorized response before the route
 handler is called.
 """
 
+import logging
 from fastapi import Depends
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
@@ -29,6 +30,8 @@ from app.dependencies.db import get_db
 from app.models.user import User
 from app.utils.exceptions import CredentialsException
 from app.utils.jwt import decode_access_token
+
+logger = logging.getLogger(__name__)
 
 # oauth2_scheme tells FastAPI's OpenAPI schema where to look for the token.
 # tokenUrl points to the login endpoint — used by Swagger UI's Authorize button.

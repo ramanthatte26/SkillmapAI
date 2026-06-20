@@ -158,16 +158,40 @@ class ProgressService:
         # Flush progress change so the COUNT below reflects it
         db.flush()
 
-        completed_count = (
-            db.query(func.count(VideoProgress.id))
-            .filter(
+        # Check if this roadmap has segment videos
+        has_segments = db.query(func.count(Video.id)).filter(
+            Video.roadmap_id == video.roadmap_id,
+            Video.is_segment == True
+        ).scalar() > 0
+
+        if has_segments:
+            total_segments = db.query(func.count(Video.id)).filter(
+                Video.roadmap_id == video.roadmap_id,
+                Video.is_segment == True
+            ).scalar() or 1
+            completed_segments = db.query(func.count(VideoProgress.id)).filter(
                 VideoProgress.user_id == user_id,
                 VideoProgress.roadmap_id == video.roadmap_id,
-                VideoProgress.is_completed == True,  # noqa: E712
+                VideoProgress.is_completed == True,
+                VideoProgress.video_id.in_(
+                    db.query(Video.id).filter(
+                        Video.roadmap_id == video.roadmap_id,
+                        Video.is_segment == True
+                    )
+                )
+            ).scalar() or 0
+            roadmap.completed_videos = 1 if completed_segments == total_segments else 0
+        else:
+            completed_count = (
+                db.query(func.count(VideoProgress.id))
+                .filter(
+                    VideoProgress.user_id == user_id,
+                    VideoProgress.roadmap_id == video.roadmap_id,
+                    VideoProgress.is_completed == True,  # noqa: E712
+                )
+                .scalar()
             )
-            .scalar()
-        )
-        roadmap.completed_videos = completed_count or 0
+            roadmap.completed_videos = completed_count or 0
 
         db.commit()
         db.refresh(progress)
@@ -227,21 +251,47 @@ class ProgressService:
                 "You do not have permission to view stats for this roadmap."
             )
 
-        total = roadmap.total_videos
+        # Check if this roadmap has segment videos
+        has_segments = db.query(func.count(Video.id)).filter(
+            Video.roadmap_id == roadmap_id,
+            Video.is_segment == True
+        ).scalar() > 0
 
-        # Live COUNT — always accurate regardless of counter sync state
-        completed = (
-            db.query(func.count(VideoProgress.id))
-            .filter(
+        if has_segments:
+            total_segments = db.query(func.count(Video.id)).filter(
+                Video.roadmap_id == roadmap_id,
+                Video.is_segment == True
+            ).scalar() or 1
+            completed_segments = db.query(func.count(VideoProgress.id)).filter(
                 VideoProgress.user_id == user_id,
                 VideoProgress.roadmap_id == roadmap_id,
-                VideoProgress.is_completed == True,  # noqa: E712
-            )
-            .scalar()
-        ) or 0
+                VideoProgress.is_completed == True,
+                VideoProgress.video_id.in_(
+                    db.query(Video.id).filter(
+                        Video.roadmap_id == roadmap_id,
+                        Video.is_segment == True
+                    )
+                )
+            ).scalar() or 0
+            
+            total = 1
+            completed = 1 if completed_segments == total_segments else 0
+            percentage = round((completed_segments / total_segments * 100), 2)
+        else:
+            total = roadmap.total_videos
+            # Live COUNT — always accurate regardless of counter sync state
+            completed = (
+                db.query(func.count(VideoProgress.id))
+                .filter(
+                    VideoProgress.user_id == user_id,
+                    VideoProgress.roadmap_id == roadmap_id,
+                    VideoProgress.is_completed == True,  # noqa: E712
+                )
+                .scalar()
+            ) or 0
+            percentage = round((completed / total * 100), 2) if total > 0 else 0.0
 
         remaining = total - completed
-        percentage = round((completed / total * 100), 2) if total > 0 else 0.0
 
         logger.debug(
             "get_roadmap_stats: roadmap=%s total=%d completed=%d pct=%.2f",

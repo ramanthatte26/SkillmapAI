@@ -20,6 +20,8 @@ class ModuleResponse(BaseModel):
     description: str | None
     position: int
     videos: list[VideoResponse] = []
+    module_start_time: int | None = None
+    module_youtube_url: str | None = None
 
     model_config = {"from_attributes": True}
 

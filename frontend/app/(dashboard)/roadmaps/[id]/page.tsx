@@ -5,13 +5,24 @@ import { useParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { roadmapsApi, progressApi, videosApi, searchApi } from '@/lib/api';
 import VideoItem from '@/components/roadmap/VideoItem';
-import { clampPct, formatDate } from '@/lib/utils';
+import { clampPct, formatDate, formatDuration } from '@/lib/utils';
 import type { RoadmapDetailResponse, ModuleResponse, RoadmapInsightsResponse, VideoNotesResponse, SearchResult } from '@/types';
 import {
   ArrowLeft, ExternalLink, Play, CheckCircle2,
   Video, BarChart3, Calendar, Sparkles, ChevronDown, ChevronUp,
   Brain, Lightbulb, Clock, Check, AlertCircle,
+  FileText, BookOpen, MessageSquare, Tag, Loader2
 } from 'lucide-react';
+
+function formatSeconds(secs: number | null | undefined): string {
+  if (secs === null || secs === undefined) return '00:00';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  return h > 0 
+    ? `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+    : `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
 
 function SkeletonDetail() {
   return (
@@ -218,6 +229,14 @@ export default function RoadmapDetailPage() {
   const [isGeneratingModules, setIsGeneratingModules] = useState(false);
   const [openModuleIds, setOpenModuleIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<'modules' | 'list' | 'search'>('modules');
+
+  const isSingleVideo = modules.some((m) => m.module_start_time !== null && m.module_start_time !== undefined);
+
+  useEffect(() => {
+    if (isSingleVideo && activeTab === 'list') {
+      setActiveTab('modules');
+    }
+  }, [isSingleVideo, activeTab]);
 
   const [insights, setInsights] = useState<RoadmapInsightsResponse | null>(null);
   const [isLoadingInsights, setIsLoadingInsights] = useState(false);
@@ -890,22 +909,24 @@ export default function RoadmapDetailPage() {
                   Modules
                 </button>
               )}
-              <button
-                onClick={() => setActiveTab('list')}
-                style={{
-                  border: 'none',
-                  padding: '4px 12px',
-                  borderRadius: '6px',
-                  fontSize: '0.78rem',
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  background: activeTab === 'list' ? 'rgba(245,158,11,0.12)' : 'transparent',
-                  color: activeTab === 'list' ? 'var(--amber-400)' : 'var(--text-muted)',
-                  transition: 'all 0.2s',
-                }}
-              >
-                All Videos
-              </button>
+              {!isSingleVideo && (
+                <button
+                  onClick={() => setActiveTab('list')}
+                  style={{
+                    border: 'none',
+                    padding: '4px 12px',
+                    borderRadius: '6px',
+                    fontSize: '0.78rem',
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                    background: activeTab === 'list' ? 'rgba(245,158,11,0.12)' : 'transparent',
+                    color: activeTab === 'list' ? 'var(--amber-400)' : 'var(--text-muted)',
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  All Videos
+                </button>
+              )}
               <button
                 onClick={() => setActiveTab('search')}
                 style={{
@@ -929,92 +950,332 @@ export default function RoadmapDetailPage() {
         {/* Content View */}
         {/* Content View */}
         {activeTab === 'modules' && modules.length > 0 ? (
-          /* Modules Collapsible Cards View */
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            {modules.map((mod) => {
-              const isOpen = openModuleIds.has(mod.id);
-              const { completed, total, pct } = getModuleProgress(mod.videos);
-              return (
-                <div
-                  key={mod.id}
-                  className="glass-card"
-                  style={{
-                    overflow: 'hidden',
-                    transition: 'border-color 0.2s',
-                    border: isOpen ? '1px solid rgba(245,158,11,0.2)' : '1px solid var(--border-subtle)',
-                  }}
-                >
-                  {/* Module Header */}
+          isSingleVideo ? (
+            /* Single Course Video Modules View */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {modules.map((mod) => {
+                const video = mod.videos[0];
+                if (!video) return null;
+
+                const isCompleted = completedIds.has(video.id);
+                const isUpdating = updatingId === video.id;
+                const isGenerating = generatingNotes.has(video.id);
+
+                let parsedNotes: VideoNotesResponse | null = null;
+                if (video.ai_notes && video.ai_notes_status === 'done') {
+                  try {
+                    const raw = JSON.parse(video.ai_notes);
+                    parsedNotes = {
+                      video_id: video.id,
+                      ai_notes_status: video.ai_notes_status,
+                      summary: raw.summary ?? '',
+                      key_concepts: raw.key_concepts ?? [],
+                      important_terms: raw.important_terms ?? [],
+                      interview_questions: raw.interview_questions ?? [],
+                    };
+                  } catch {
+                    parsedNotes = null;
+                  }
+                }
+
+                const hasNotes = parsedNotes !== null;
+                const notesOpen = openModuleIds.has(mod.id);
+
+                const toggleNotes = () => {
+                  setOpenModuleIds((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(mod.id)) {
+                      next.delete(mod.id);
+                    } else {
+                      next.add(mod.id);
+                    }
+                    return next;
+                  });
+                };
+
+                return (
                   <div
-                    onClick={() => toggleModule(mod.id)}
+                    key={mod.id}
+                    className="glass-card"
+                    id={`video-item-${video.id}`}
                     style={{
-                      padding: '1.125rem 1.375rem',
-                      cursor: 'pointer',
-                      background: 'rgba(255,255,255,0.01)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '1rem',
-                      userSelect: 'none',
+                      overflow: 'hidden',
+                      transition: 'all 0.2s ease',
+                      border: isCompleted
+                        ? '1px solid rgba(52, 211, 153, 0.15)'
+                        : '1px solid var(--border-subtle)',
+                      background: isCompleted
+                        ? 'rgba(16, 185, 129, 0.04)'
+                        : 'transparent',
+                      opacity: isUpdating ? 0.7 : 1,
                     }}
                   >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 0.25rem' }}>
-                        {mod.name}
-                      </h3>
-                      {mod.description && (
-                        <p style={{ margin: 0, fontSize: '0.825rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
-                          {mod.description}
-                        </p>
-                      )}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1.25rem', padding: '1.25rem 1.5rem' }}>
+                      <div style={{
+                        width: '32px', height: '32px', borderRadius: '10px', flexShrink: 0, marginTop: '2px',
+                        background: isCompleted ? 'rgba(16,185,129,0.15)' : 'var(--bg-card)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '0.85rem', fontWeight: 700,
+                        color: isCompleted ? 'var(--emerald-400)' : 'var(--text-muted)',
+                        border: '1px solid',
+                        borderColor: isCompleted ? 'rgba(16,185,129,0.2)' : 'var(--border-subtle)',
+                      }}>
+                        {isCompleted ? <CheckCircle2 size={16} /> : (mod.position + 1)}
+                      </div>
+
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <h3 style={{
+                          margin: '0 0 0.375rem', fontSize: '1rem', fontWeight: 600,
+                          color: isCompleted ? 'var(--text-secondary)' : 'var(--text-primary)',
+                          textDecoration: isCompleted ? 'line-through' : 'none',
+                          lineHeight: 1.4,
+                        }}>
+                          {mod.name}
+                        </h3>
+                        {mod.description && (
+                          <p style={{ margin: '0 0 0.75rem', fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                            {mod.description}
+                          </p>
+                        )}
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                          {mod.module_start_time !== null && (
+                            <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              <Clock size={12} /> Start: {formatSeconds(mod.module_start_time)}
+                            </span>
+                          )}
+                          {video.duration_seconds && (
+                            <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                              Duration: {formatDuration(video.duration_seconds)}
+                            </span>
+                          )}
+
+                          {mod.module_youtube_url && (
+                            <a
+                              href={mod.module_youtube_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '4px',
+                                fontSize: '0.78rem', color: 'var(--amber-500)', textDecoration: 'none', fontWeight: 600,
+                              }}
+                            >
+                              <Play size={12} fill="var(--amber-500)" /> Start Learning <ExternalLink size={10} />
+                            </a>
+                          )}
+
+                          {video.ai_notes_status === 'generating' || isGenerating ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> Generating notes…
+                            </span>
+                          ) : hasNotes ? (
+                            <button
+                              onClick={toggleNotes}
+                              style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '3px',
+                                fontSize: '0.75rem', color: 'var(--amber-400)', fontWeight: 600,
+                                background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.18)',
+                                borderRadius: '5px', padding: '2px 8px', cursor: 'pointer',
+                              }}
+                            >
+                              <FileText size={11} /> {notesOpen ? 'Hide Notes' : 'View Notes'}
+                              {notesOpen ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleGenerateNotes(video.id)}
+                              disabled={isGenerating}
+                              style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '3px',
+                                fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 500,
+                                background: 'transparent', border: '1px solid var(--border-subtle)',
+                                borderRadius: '5px', padding: '2px 8px', cursor: 'pointer',
+                                transition: 'all 0.2s',
+                              }}
+                            >
+                              <FileText size={11} /> Generate Notes
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ flexShrink: 0, marginTop: '2px' }}>
+                        <input
+                          type="checkbox"
+                          id={`check-module-${mod.id}`}
+                          className="custom-checkbox"
+                          checked={isCompleted}
+                          onChange={async (e) => {
+                            const checked = e.target.checked;
+                            setCompletedIds((prev) => {
+                              const next = new Set(prev);
+                              if (checked) next.add(video.id);
+                              else next.delete(video.id);
+                              return next;
+                            });
+                            try {
+                              await handleToggle(video.id, checked);
+                            } catch {
+                              setCompletedIds((prev) => {
+                                const next = new Set(prev);
+                                if (checked) next.delete(video.id);
+                                else next.add(video.id);
+                                return next;
+                              });
+                            }
+                          }}
+                          disabled={isUpdating}
+                          aria-label={`Mark module "${mod.name}" as completed`}
+                        />
+                      </div>
                     </div>
-                    
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', flexShrink: 0 }}>
-                      <div style={{ textAlign: 'right' }}>
-                        <span style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text-secondary)' }}>
-                          {completed}/{total} videos
-                        </span>
-                        {total > 0 && (
-                          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: pct === 100 ? 'var(--emerald-400)' : 'var(--amber-400)', marginTop: '2px' }}>
-                            {pct}% done
+
+                    {hasNotes && notesOpen && parsedNotes && (
+                      <div style={{
+                        borderTop: '1px solid var(--border-subtle)',
+                        padding: '1.25rem 1.5rem',
+                        background: 'rgba(0,0,0,0.14)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1.125rem',
+                      }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '0.5rem', fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--amber-400)' }}>
+                            <FileText size={12} /> SUMMARY
+                          </div>
+                          <p style={{ margin: 0, fontSize: '0.82rem', lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                            {parsedNotes.summary}
+                          </p>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
+                          {parsedNotes.key_concepts.length > 0 && (
+                            <div style={{ background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(129,140,248,0.1)', borderRadius: '10px', padding: '0.875rem 1rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '0.625rem', fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.05em', color: 'rgb(129,140,248)' }}>
+                                <BookOpen size={12} /> KEY CONCEPTS
+                              </div>
+                              <ul style={{ margin: 0, paddingLeft: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                                {parsedNotes.key_concepts.map((c, i) => <li key={i} style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>{c}</li>)}
+                              </ul>
+                            </div>
+                          )}
+
+                          {parsedNotes.important_terms.length > 0 && (
+                            <div style={{ background: 'rgba(16,185,129,0.03)', border: '1px solid rgba(52,211,153,0.1)', borderRadius: '10px', padding: '0.875rem 1rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '0.625rem', fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--emerald-400)' }}>
+                                <Tag size={12} /> IMPORTANT TERMS
+                              </div>
+                              <ul style={{ margin: 0, paddingLeft: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                                {parsedNotes.important_terms.map((t, i) => <li key={i} style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>{t}</li>)}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+
+                        {parsedNotes.interview_questions.length > 0 && (
+                          <div style={{ background: 'rgba(245,158,11,0.03)', border: '1px solid rgba(245,158,11,0.1)', borderRadius: '10px', padding: '0.875rem 1rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '0.625rem', fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--amber-400)' }}>
+                              <MessageSquare size={12} /> INTERVIEW QUESTIONS
+                            </div>
+                            <ol style={{ margin: 0, paddingLeft: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                              {parsedNotes.interview_questions.map((q, i) => <li key={i} style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{q}</li>)}
+                            </ol>
                           </div>
                         )}
                       </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            /* Modules Collapsible Cards View */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {modules.map((mod) => {
+                const isOpen = openModuleIds.has(mod.id);
+                const { completed, total, pct } = getModuleProgress(mod.videos);
+                return (
+                  <div
+                    key={mod.id}
+                    className="glass-card"
+                    style={{
+                      overflow: 'hidden',
+                      transition: 'border-color 0.2s',
+                      border: isOpen ? '1px solid rgba(245,158,11,0.2)' : '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    {/* Module Header */}
+                    <div
+                      onClick={() => toggleModule(mod.id)}
+                      style={{
+                        padding: '1.125rem 1.375rem',
+                        cursor: 'pointer',
+                        background: 'rgba(255,255,255,0.01)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '1rem',
+                        userSelect: 'none',
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 0.25rem' }}>
+                          {mod.name}
+                        </h3>
+                        {mod.description && (
+                          <p style={{ margin: 0, fontSize: '0.825rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                            {mod.description}
+                          </p>
+                        )}
+                      </div>
                       
-                      <div style={{ color: 'var(--text-muted)' }}>
-                        {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', flexShrink: 0 }}>
+                        <div style={{ textAlign: 'right' }}>
+                          <span style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text-secondary)' }}>
+                            {completed}/{total} videos
+                          </span>
+                          {total > 0 && (
+                            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: pct === 100 ? 'var(--emerald-400)' : 'var(--amber-400)', marginTop: '2px' }}>
+                              {pct}% done
+                            </div>
+                          )}
+                        </div>
+                        
+                        <div style={{ color: 'var(--text-muted)' }}>
+                          {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  {/* Module Body */}
-                  {isOpen && (
-                    <div style={{
-                      padding: '0 1.375rem 1.375rem',
-                      borderTop: '1px solid var(--border-subtle)',
-                      background: 'rgba(0,0,0,0.12)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.5rem',
-                      paddingTop: '1.125rem',
-                    }}>
-                      {mod.videos.map((video) => (
-                        <VideoItem
-                          key={video.id}
-                          video={video}
-                          isCompleted={completedIds.has(video.id)}
-                          onToggle={handleToggle}
-                          isUpdating={updatingId === video.id}
-                          onGenerateNotes={handleGenerateNotes}
-                          isGeneratingNotes={generatingNotes.has(video.id)}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                    {/* Module Body */}
+                    {isOpen && (
+                      <div style={{
+                        padding: '0 1.375rem 1.375rem',
+                        borderTop: '1px solid var(--border-subtle)',
+                        background: 'rgba(0,0,0,0.12)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem',
+                        paddingTop: '1.125rem',
+                      }}>
+                        {mod.videos.map((video) => (
+                          <VideoItem
+                            key={video.id}
+                            video={video}
+                            isCompleted={completedIds.has(video.id)}
+                            onToggle={handleToggle}
+                            isUpdating={updatingId === video.id}
+                            onGenerateNotes={handleGenerateNotes}
+                            isGeneratingNotes={generatingNotes.has(video.id)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )
         ) : activeTab === 'search' ? (
           /* Semantic Search Section */
           <div className="glass-card fade-in" style={{ padding: '1.75rem 2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -1163,10 +1424,31 @@ export default function RoadmapDetailPage() {
                         </div>
                       )}
 
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.25rem' }}>
+                        {isSingleVideo && result.start_time !== null && result.start_time !== undefined && (
+                          <a
+                            href={`https://www.youtube.com/watch?v=${roadmap?.playlist_id}&t=${Math.floor(result.start_time)}s`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn-primary"
+                            style={{
+                              padding: '4px 10px',
+                              fontSize: '0.78rem',
+                              borderRadius: '6px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.375rem',
+                              height: '28px',
+                              textDecoration: 'none',
+                              color: 'var(--bg-main)',
+                            }}
+                          >
+                            <ExternalLink size={12} /> Watch at {formatSeconds(result.start_time)}
+                          </a>
+                        )}
                         <button
                           onClick={() => {
-                            setActiveTab('list');
+                            setActiveTab(isSingleVideo ? 'modules' : 'list');
                             setTimeout(() => {
                               const el = document.getElementById(`video-item-${result.video_id}`);
                               if (el) {
@@ -1193,7 +1475,7 @@ export default function RoadmapDetailPage() {
                             height: '28px',
                           }}
                         >
-                          <Play size={12} /> Go to Video
+                          <Play size={12} /> {isSingleVideo ? 'Go to Module' : 'Go to Video'}
                         </button>
                       </div>
                     </div>

@@ -160,6 +160,9 @@ class RoadmapService:
         for video in roadmap.videos:
             video.is_completed = video.id in completed_video_ids
 
+        # Filter out segment videos from the main videos list of the roadmap detail
+        roadmap.videos = [v for v in roadmap.videos if not v.is_segment]
+
         return RoadmapDetailResponse.model_validate(roadmap)
 
     # ─────────────────────────────────────────────────────────────

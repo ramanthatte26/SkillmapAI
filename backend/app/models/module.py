@@ -50,6 +50,14 @@ class Module(Base, TimestampMixin):
         Integer,
         nullable=False,
     )
+    module_start_time: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    module_youtube_url: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
 
     # ── Relationships ──────────────────────────────────────────────
     roadmap: Mapped["Roadmap"] = relationship(

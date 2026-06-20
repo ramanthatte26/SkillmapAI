@@ -30,6 +30,48 @@ class AIModulesOutput(BaseModel):
     modules: list[AIModuleSchema]
 
 
+class AISingleVideoModuleSchema(BaseModel):
+    name: str = Field(
+        ...,
+        description=(
+            "Descriptive, educationally meaningful, topic-specific name of the module (e.g., "
+            "'Java Environment & Setup', 'Variables and Data Types', 'Control Flow & Loops'). "
+            "Do NOT use generic names like 'Introduction', 'Deep Dive', 'Advanced Concepts', "
+            "'Fundamentals', 'Part 1', or 'Conclusion'."
+        ),
+    )
+    description: str = Field(
+        ...,
+        description=(
+            "Rich educational description generated from the transcript content, specifying: "
+            "1. What the learner will study. "
+            "2. Why the topic matters. "
+            "3. Major concepts covered. "
+            "Ensure it has an educational tone, is topic-focused, and contains absolutely no "
+            "external links, social media, promotional content, or timestamp dumps."
+        ),
+    )
+    start_timestamp_seconds: int = Field(
+        ...,
+        description=(
+            "The start timestamp of this module in seconds. Must correspond exactly to "
+            "an actual start timestamp of one of the blocks in the provided transcript outline. "
+            "The first module must start at 0."
+        ),
+    )
+
+
+class AISingleVideoModulesOutput(BaseModel):
+    course_overview: str = Field(
+        ...,
+        description=(
+            "A concise, high-quality, professional educational summary of the entire course, "
+            "generated using only transcript contents (no external links, promos, or timestamps)."
+        ),
+    )
+    modules: list[AISingleVideoModuleSchema]
+
+
 class AIService:
     """
     Connects to OpenRouter to group video titles into a structured set of modules.
@@ -190,6 +232,180 @@ class AIService:
 
         logger.info("Fallback generation created %d modules for %r", len(modules), roadmap_title)
         return modules
+
+    def extract_course_curriculum(
+        self,
+        roadmap_title: str,
+        timestamped_transcript: str,
+        total_duration_seconds: int
+    ) -> tuple[str, list[dict]]:
+        """
+        Send course title and timestamped transcript outline to OpenRouter,
+        demanding a structured JSON response segmenting the course into modules with start times.
+        Runs validation and retries up to 3 times before falling back.
+        """
+        if not self.settings.openrouter_api_key:
+            logger.warning("OPENROUTER_API_KEY is empty. Real AI course segmentation cannot proceed.")
+            raise BadRequestException(
+                "OpenRouter API key is missing. Please set OPENROUTER_API_KEY in your backend .env file."
+            )
+
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.settings.openrouter_api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": self.settings.frontend_url,
+            "X-Title": "SkillMap AI",
+        }
+
+        system_prompt = (
+            "You are an expert course designer and senior curriculum architect.\n"
+            "Your task is to take the title of a learning course and a timestamped outline of its transcript, "
+            "and segment this video course into structured learning modules based on actual topic transitions in the content.\n\n"
+            "You must return a JSON object that strictly conforms to the following schema:\n"
+            "{\n"
+            "  \"course_overview\": \"A concise, high-quality, professional educational summary of the entire course, "
+            "generated using only transcript contents (no external links, promos, or timestamps).\",\n"
+            "  \"modules\": [\n"
+            "    {\n"
+            "      \"name\": \"Module Name\",\n"
+            "      \"description\": \"Module Description\",\n"
+            "      \"start_timestamp_seconds\": 4520\n"
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            "Rules for Module Segments & Names:\n"
+            "1. Segment the video transcript into educationally meaningful modules with logical, content-based topic boundaries.\n"
+            "2. Generate specific, topic-aware module names that reflect the subject matter (e.g., 'Object-Oriented Programming', 'Variables and Data Types', 'Control Flow & Loops', 'Collections Framework', 'Exception Handling', 'Multithreading').\n"
+            "3. Strictly avoid generic, boilerplate module names such as 'Introduction', 'Part 1', 'Section 2', 'Fundamentals', 'Core Concepts', 'Deep Dive', 'Practical Applications', 'Advanced Concepts', 'Conclusion', or similar.\n\n"
+            "Rules for Timestamps:\n"
+            "1. Identify the actual topic transitions from the content. Every module's `start_timestamp_seconds` must correspond exactly to one of the start timestamps present in the provided transcript outline (converted to total seconds).\n"
+            "2. Do NOT invent, estimate, or interpolate timestamps. Do NOT generate synthetic/placeholder timestamps (e.g., exactly every 5 or 10 minutes).\n"
+            "3. Ensure chronological order: start_timestamp_seconds must strictly increase for each subsequent module.\n"
+            "4. The first module must start at exactly 0 seconds (start_timestamp_seconds = 0).\n\n"
+            "Rules for Descriptions:\n"
+            "1. For each module, generate a rich description (overview) outlining: 1. What the learner will study. 2. Why the topic matters. 3. Major concepts covered.\n"
+            "2. Ensure the tone is educational, professional, and topic-focused.\n"
+            "3. Descriptions must be generated from the transcript content. Do not copy from YouTube metadata.\n"
+            "4. Strictly exclude any external links, social media links, promotional content, sponsors, coupon codes, advertisements, or timestamp lists.\n\n"
+            "Output Requirement:\n"
+            "Output ONLY valid, raw JSON. Do not wrap it in markdown code blocks, do not write introductory/concluding text, and do not include explanations."
+        )
+
+        user_content = (
+            f"Course Title: {roadmap_title}\n\n"
+            f"Transcript Outline:\n{timestamped_transcript}"
+        )
+
+        payload = {
+            "model": self.settings.openrouter_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.2,
+        }
+
+        # Curriculum Validation Utility function inside extract_course_curriculum
+        def validate_curriculum(modules_def: list[dict], total_dur: int) -> bool:
+            if not modules_def:
+                logger.warning("Curriculum validation failed: Modules list is empty.")
+                return False
+            
+            # First module starts at 0
+            if modules_def[0].get("start_timestamp_seconds") != 0:
+                logger.warning("Curriculum validation failed: First module start is %r (expected 0)", modules_def[0].get("start_timestamp_seconds"))
+                return False
+                
+            n = len(modules_def)
+            for idx in range(n):
+                curr_start = modules_def[idx].get("start_timestamp_seconds")
+                if curr_start is None:
+                    logger.warning("Curriculum validation failed: Module %d has missing start timestamp", idx)
+                    return False
+                if not isinstance(curr_start, int) or isinstance(curr_start, bool):
+                    logger.warning("Curriculum validation failed: Module %d has non-integer timestamp %r", idx, curr_start)
+                    return False
+                if curr_start < 0:
+                    logger.warning("Curriculum validation failed: Module %d has negative start timestamp %d", idx, curr_start)
+                    return False
+                if curr_start >= total_dur:
+                    logger.warning("Curriculum validation failed: Module %d start timestamp %d >= total duration %d", idx, curr_start, total_dur)
+                    return False
+                if idx > 0:
+                    prev_start = modules_def[idx - 1].get("start_timestamp_seconds")
+                    if curr_start <= prev_start:
+                        logger.warning("Curriculum validation failed: Non-increasing timestamps: module %d (%d) <= module %d (%d)", idx, curr_start, idx - 1, prev_start)
+                        return False
+            return True
+
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                logger.info("=================================================================")
+                logger.info("AI COURSE SEGMENTATION - LLM CALL ATTEMPT %d/%d", attempt, max_attempts)
+                logger.info("Model used: %s", self.settings.openrouter_model)
+                logger.info("=================================================================")
+
+                with httpx.Client(timeout=45.0) as client:
+                    response = client.post(url, headers=headers, json=payload)
+                    response.raise_for_status()
+                    res_data = response.json()
+                    content = res_data["choices"][0]["message"]["content"].strip()
+
+                logger.info("=================================================================")
+                logger.info("AI COURSE SEGMENTATION - RAW RESPONSE RECEIVED (ATTEMPT %d):\n%s", attempt, content)
+                logger.info("=================================================================")
+
+                if content.startswith("```"):
+                    lines = content.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    content = "\n".join(lines).strip()
+
+                data = json.loads(content)
+                validated = AISingleVideoModulesOutput.model_validate(data)
+                parsed_data = [m.model_dump() for m in validated.modules]
+                
+                # Check validation rules
+                if validate_curriculum(parsed_data, total_duration_seconds):
+                    logger.info("AI course segmentation successful on attempt %d. Received %d modules.", attempt, len(parsed_data))
+                    return validated.course_overview, parsed_data
+                else:
+                    logger.warning("Attempt %d generated an invalid curriculum. Retrying curriculum extraction...", attempt)
+            except Exception as exc:
+                logger.error("AI course segmentation attempt %d failed: %s", attempt, exc)
+
+        logger.error("All AI course segmentation attempts failed. Falling back to programmatic segmentation.")
+        fallback_overview = f"This course provides a comprehensive learning path covering the key topics of {roadmap_title}."
+        return fallback_overview, self._generate_fallback_course_curriculum(roadmap_title, total_duration_seconds)
+
+    def _generate_fallback_course_curriculum(self, roadmap_title: str, total_duration_seconds: int) -> list[dict]:
+        """
+        Fallback segmenter that splits a long video into three modules of equal duration.
+        """
+        dur = total_duration_seconds or 3600
+        chunk = dur // 3
+        return [
+            {
+                "name": f"{roadmap_title} Fundamentals",
+                "description": f"Core intro concepts of {roadmap_title}.",
+                "start_timestamp_seconds": 0
+            },
+            {
+                "name": f"Intermediate {roadmap_title} Concepts",
+                "description": f"Practical application and key patterns of {roadmap_title}.",
+                "start_timestamp_seconds": chunk
+            },
+            {
+                "name": f"Advanced {roadmap_title} Topics",
+                "description": f"Deep dive and advanced projects of {roadmap_title}.",
+                "start_timestamp_seconds": chunk * 2
+            }
+        ]
 
     def generate_learning_insights(
         self,
@@ -384,6 +600,7 @@ class AIService:
         roadmap_title: str,
         module_name: str | None = None,
         video_description: str | None = None,
+        transcript_text: str | None = None,
     ) -> dict:
         """
         Call OpenRouter to generate structured study notes for a single video.
@@ -393,6 +610,7 @@ class AIService:
           roadmap_title     — parent playlist / roadmap title (provides curriculum context)
           module_name       — which learning module this video belongs to (optional)
           video_description — YouTube description (optional; trimmed to 500 chars)
+          transcript_text   — transcript segments (optional; trimmed to 1200 chars)
 
         Returns a dict with keys:
           summary, key_concepts, important_terms, interview_questions
@@ -419,7 +637,7 @@ class AIService:
             "You are an expert educator and study assistant.\n"
             "Your task is to generate structured, concise study notes for a single educational video.\n\n"
             "You will be given the video title, its parent learning roadmap, optionally the module it "
-            "belongs to, and optionally its description. Use these to infer what the video teaches.\n\n"
+            "belongs to, optionally its description, and optionally a snippet of its transcript. Use these to infer what the video teaches.\n\n"
             "You must return a JSON object that strictly conforms to the following schema:\n"
             "{\n"
             "  \"summary\": \"A clear 2-4 sentence overview of what the video covers and why it matters.\",\n"
@@ -454,6 +672,18 @@ class AIService:
             trimmed_desc = video_description[:500].strip()
             if trimmed_desc:
                 context_lines.append(f"Video Description: {trimmed_desc}")
+        if transcript_text:
+            cleaned_trans = ""
+            try:
+                entries = json.loads(transcript_text)
+                if isinstance(entries, list):
+                    cleaned_trans = " ".join([e.get("text", "") for e in entries])
+            except Exception:
+                cleaned_trans = transcript_text
+            
+            trimmed_trans = cleaned_trans[:1200].strip()
+            if trimmed_trans:
+                context_lines.append(f"Video Transcript Context: {trimmed_trans}")
 
         user_content = "\n".join(context_lines)
 

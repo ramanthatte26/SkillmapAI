@@ -28,7 +28,10 @@ def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == 'postgresql':
         bind.execute(sa.text("COMMIT"))
-        for val in ['importing', 'generating_modules', 'generating_notes', 'building_search_index', 'ready', 'failed']:
+        for val in [
+            'importing', 'generating_modules', 'generating_notes', 'building_search_index', 'ready', 'failed',
+            'IMPORTING', 'GENERATING_MODULES', 'GENERATING_NOTES', 'BUILDING_SEARCH_INDEX', 'READY', 'FAILED'
+        ]:
             try:
                 bind.execute(sa.text(f"ALTER TYPE roadmap_status_enum ADD VALUE '{val}'"))
             except Exception as e:

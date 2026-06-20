@@ -22,6 +22,49 @@ from app.utils.exceptions import ForbiddenException, NotFoundException
 logger = logging.getLogger(__name__)
 
 
+def clean_text_for_embedding(text: str | None) -> str:
+    """
+    Cleans embedding documents by ignoring and removing:
+    - URLs (http/https and www links)
+    - Email addresses
+    - Timestamp dumps (e.g. 12:34 or 1:23:45)
+    - Markdown links [text](url) -> text
+    - Lines or segments containing promotional/social keywords (Discord, GitHub, Twitter, sponsors, ads, etc.)
+    """
+    if not text:
+        return ""
+    
+    # Remove markdown link syntax first: [text](url) -> text
+    text = re.sub(r'\[([^\]]+)\]\((https?://\S+|www\.\S+)\)', r'\1', text)
+    # Remove raw URLs
+    text = re.sub(r'https?://\S+|www\.\S+', '', text)
+    # Remove emails
+    text = re.sub(r'\S+@\S+', '', text)
+    # Remove timestamp dumps like [01:23:45] or 04:30
+    text = re.sub(r'\[?\b\d{1,2}:\d{2}(?::\d{2})?\b\]?', '', text)
+    
+    # Split into lines/segments to filter out promotional content
+    segments = re.split(r'(\n|\. |\! |\? )', text)
+    cleaned_segments = []
+    
+    promo_keywords = {
+        "discord", "github", "twitter", "instagram", "facebook", "patreon", 
+        "paypal", "sponsor", "coupon", "discount", "promo", "subscribe", 
+        "follow me", "merch", "website", "shop", "advertisement", "advertise",
+        "ad-free", "social media"
+    }
+    
+    for seg in segments:
+        if any(kw in seg.lower() for kw in promo_keywords):
+            continue
+        cleaned_segments.append(seg)
+        
+    cleaned_text = "".join(cleaned_segments)
+    # Normalize spaces
+    cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+    return cleaned_text
+
+
 class SearchService:
     """
     Coordinates semantic search:
@@ -38,11 +81,11 @@ class SearchService:
         self,
         roadmap_title: str,
         module_name: str | None,
+        module_description: str | None,
         video_title: str,
-        video_description: str | None,
         ai_notes_json: str | None
     ) -> str:
-        """Combine all textual contexts of a video into a single indexable document block."""
+        """Combine all cleaned textual contexts of a video module into a single indexable document block."""
         summary = ""
         key_concepts = []
         important_terms = []
@@ -66,16 +109,27 @@ class SearchService:
                 return ", ".join([str(item) for item in items if item])
             return str(items) if items else ""
 
+        # Clean all individual textual fields
+        roadmap_title_clean = clean_text_for_embedding(roadmap_title)
+        module_name_clean = clean_text_for_embedding(module_name)
+        module_description_clean = clean_text_for_embedding(module_description)
+        video_title_clean = clean_text_for_embedding(video_title)
+        summary_clean = clean_text_for_embedding(summary)
+        
+        cleaned_concepts = [clean_text_for_embedding(c) for c in key_concepts if c]
+        cleaned_terms = [clean_text_for_embedding(t) for t in important_terms if t]
+        cleaned_questions = [clean_text_for_embedding(q) for q in interview_questions if q]
+
         # Construct segments
         parts = [
-            f"Roadmap Title: {roadmap_title}",
-            f"Module Name: {module_name or 'N/A'}",
-            f"Video Title: {video_title}",
-            f"Video Description: {video_description or ''}",
-            f"AI Summary: {summary}",
-            f"Key Concepts: {format_list(key_concepts)}",
-            f"Important Terms: {format_list(important_terms)}",
-            f"Interview Questions: {format_list(interview_questions)}"
+            f"Roadmap Title: {roadmap_title_clean}",
+            f"Module Name: {module_name_clean or 'N/A'}",
+            f"Module Overview: {module_description_clean or ''}",
+            f"Video Title: {video_title_clean}",
+            f"AI Summary: {summary_clean}",
+            f"Key Concepts: {format_list(cleaned_concepts)}",
+            f"Important Terms: {format_list(cleaned_terms)}",
+            f"Interview Questions: {format_list(cleaned_questions)}"
         ]
 
         # Join non-empty metadata fields
@@ -108,6 +162,66 @@ class SearchService:
             chunks.append(" ".join(current_chunk))
         return chunks
 
+    def chunk_transcript_with_timestamps(self, transcript_json: str) -> list[dict]:
+        """
+        Chunks transcript text into cohesive blocks of 500-1000 words.
+        Expects a JSON string representing a list of dicts with 'text' and 'start'.
+        Returns a list of dicts: {'text': str, 'start_time': float}
+        """
+        try:
+            entries = json.loads(transcript_json)
+            if not isinstance(entries, list):
+                return []
+        except Exception as exc:
+            logger.warning("chunk_transcript_with_timestamps: invalid JSON: %s", exc)
+            return []
+
+        chunks = []
+        target_size = 750
+        current_chunk_entries = []
+        current_chunk_words = 0
+
+        for entry in entries:
+            text = entry.get("text", "")
+            words = text.split()
+            if not words:
+                continue
+            
+            if current_chunk_words + len(words) > 1000 and current_chunk_entries:
+                chunk_text = " ".join([e.get("text", "") for e in current_chunk_entries])
+                start_time = current_chunk_entries[0].get("start", 0.0)
+                chunks.append({
+                    "text": chunk_text,
+                    "start_time": start_time
+                })
+                current_chunk_entries = []
+                current_chunk_words = 0
+
+            current_chunk_entries.append(entry)
+            current_chunk_words += len(words)
+
+            if current_chunk_words >= 500:
+                last_word = words[-1]
+                if current_chunk_words >= target_size or last_word.endswith('.') or last_word.endswith('?') or last_word.endswith('!'):
+                    chunk_text = " ".join([e.get("text", "") for e in current_chunk_entries])
+                    start_time = current_chunk_entries[0].get("start", 0.0)
+                    chunks.append({
+                        "text": chunk_text,
+                        "start_time": start_time
+                    })
+                    current_chunk_entries = []
+                    current_chunk_words = 0
+
+        if current_chunk_entries:
+            chunk_text = " ".join([e.get("text", "") for e in current_chunk_entries])
+            start_time = current_chunk_entries[0].get("start", 0.0)
+            chunks.append({
+                "text": chunk_text,
+                "start_time": start_time
+            })
+
+        return chunks
+
     def index_video(self, video_id: uuid.UUID, db: Session):
         """Build and index a single video document and its transcript chunks in ChromaDB."""
         try:
@@ -124,9 +238,11 @@ class SearchService:
 
             # Resolve module mapping (first assigned module, best effort)
             module_name = None
+            module_description = None
             module_id = None
             for mv in video.module_videos:
                 module_name = mv.module.name
+                module_description = mv.module.description
                 module_id = mv.module.id
                 break
 
@@ -138,8 +254,8 @@ class SearchService:
             doc_text = self.build_knowledge_document(
                 roadmap_title=roadmap.title,
                 module_name=module_name,
+                module_description=module_description,
                 video_title=video.title,
-                video_description=video.description,
                 ai_notes_json=video.ai_notes
             )
 
@@ -161,33 +277,71 @@ class SearchService:
 
             # 3. Chunk and index the transcript if available
             if video.transcript_text:
-                chunks = self.chunk_transcript(video.transcript_text)
-                if chunks:
-                    logger.info("index_video: Indexing %d transcript chunks for video %s", len(chunks), video_id)
-                    chunk_texts = []
-                    chunk_ids = []
-                    chunk_metadatas = []
-                    
-                    for idx, chunk in enumerate(chunks):
-                        chunk_ids.append(f"{video.id}_chunk_{idx}")
-                        chunk_texts.append(chunk)
-                        chunk_metadatas.append({
-                            "roadmap_id": str(roadmap.id),
-                            "video_id": str(video.id),
-                            "module_id": str(module_id) if module_id else "",
-                            "chunk_index": idx,
-                            "source_type": "transcript"
-                        })
-                    
-                    chunk_embeddings = self.embedding_service.generate_embeddings(chunk_texts)
-                    
-                    self.vector_service.collection.upsert(
-                        ids=chunk_ids,
-                        embeddings=chunk_embeddings,
-                        documents=chunk_texts,
-                        metadatas=chunk_metadatas
-                    )
-                    logger.info("index_video: %d transcript chunks indexed successfully for video %s", len(chunks), video_id)
+                is_json = False
+                try:
+                    parsed = json.loads(video.transcript_text)
+                    if isinstance(parsed, list):
+                        is_json = True
+                except Exception:
+                    pass
+
+                if is_json:
+                    chunks = self.chunk_transcript_with_timestamps(video.transcript_text)
+                    if chunks:
+                        logger.info("index_video: Indexing %d timestamped transcript chunks for video %s", len(chunks), video_id)
+                        chunk_texts = []
+                        chunk_ids = []
+                        chunk_metadatas = []
+                        
+                        for idx, chunk in enumerate(chunks):
+                            chunk_ids.append(f"{video.id}_chunk_{idx}")
+                            cleaned_chunk_text = clean_text_for_embedding(chunk["text"])
+                            chunk_texts.append(cleaned_chunk_text)
+                            chunk_metadatas.append({
+                                "roadmap_id": str(roadmap.id),
+                                "video_id": str(video.id),
+                                "module_id": str(module_id) if module_id else "",
+                                "chunk_index": idx,
+                                "start_time": chunk["start_time"],
+                                "source_type": "transcript"
+                            })
+                        
+                        chunk_embeddings = self.embedding_service.generate_embeddings(chunk_texts)
+                        self.vector_service.collection.upsert(
+                            ids=chunk_ids,
+                            embeddings=chunk_embeddings,
+                            documents=chunk_texts,
+                            metadatas=chunk_metadatas
+                        )
+                        logger.info("index_video: %d timestamped transcript chunks indexed successfully for video %s", len(chunks), video_id)
+                else:
+                    chunks = self.chunk_transcript(video.transcript_text)
+                    if chunks:
+                        logger.info("index_video: Indexing %d transcript chunks for video %s", len(chunks), video_id)
+                        chunk_texts = []
+                        chunk_ids = []
+                        chunk_metadatas = []
+                        
+                        for idx, chunk in enumerate(chunks):
+                            chunk_ids.append(f"{video.id}_chunk_{idx}")
+                            cleaned_chunk_text = clean_text_for_embedding(chunk)
+                            chunk_texts.append(cleaned_chunk_text)
+                            chunk_metadatas.append({
+                                "roadmap_id": str(roadmap.id),
+                                "video_id": str(video.id),
+                                "module_id": str(module_id) if module_id else "",
+                                "chunk_index": idx,
+                                "source_type": "transcript"
+                            })
+                        
+                        chunk_embeddings = self.embedding_service.generate_embeddings(chunk_texts)
+                        self.vector_service.collection.upsert(
+                            ids=chunk_ids,
+                            embeddings=chunk_embeddings,
+                            documents=chunk_texts,
+                            metadatas=chunk_metadatas
+                        )
+                        logger.info("index_video: %d transcript chunks indexed successfully for video %s", len(chunks), video_id)
 
         except Exception as exc:
             logger.error("index_video: Failed to index video %s: %s", video_id, exc)
@@ -211,7 +365,7 @@ class SearchService:
             video_to_module = {}
             for mod in modules:
                 for mv in mod.module_videos:
-                    video_to_module[mv.video_id] = (mod.id, mod.name)
+                    video_to_module[mv.video_id] = (mod.id, mod.name, mod.description)
 
             # 1. Clear any existing documents for this roadmap in ChromaDB
             self.vector_service.delete_by_roadmap(str(roadmap_id))
@@ -221,15 +375,15 @@ class SearchService:
             temp_items = []
 
             for video in videos:
-                mod_info = video_to_module.get(video.id, (None, None))
-                mod_id, mod_name = mod_info
+                mod_info = video_to_module.get(video.id, (None, None, None))
+                mod_id, mod_name, mod_description = mod_info
 
                 # Metadata/notes document
                 doc_text = self.build_knowledge_document(
                     roadmap_title=roadmap.title,
                     module_name=mod_name,
+                    module_description=mod_description,
                     video_title=video.title,
-                    video_description=video.description,
                     ai_notes_json=video.ai_notes
                 )
 
@@ -247,18 +401,58 @@ class SearchService:
 
                 # Transcript chunks
                 if video.transcript_text:
-                    chunks = self.chunk_transcript(video.transcript_text)
-                    for idx, chunk in enumerate(chunks):
-                        texts_to_embed.append(chunk)
-                        temp_items.append({
-                            "id": f"{video.id}_chunk_{idx}",
-                            "video_id": str(video.id),
-                            "roadmap_id": str(roadmap_id),
-                            "module_id": str(mod_id) if mod_id else "",
-                            "chunk_index": idx,
-                            "source_type": "transcript",
-                            "content": chunk
-                        })
+                    is_json = False
+                    try:
+                        parsed = json.loads(video.transcript_text)
+                        if isinstance(parsed, list):
+                            is_json = True
+                    except Exception:
+                        pass
+
+                    if is_json:
+                        chunks = self.chunk_transcript_with_timestamps(video.transcript_text)
+                        for idx, chunk in enumerate(chunks):
+                            # For single video segments, check if we can resolve specific module mapping
+                            # based on the chunk's start time
+                            chunk_mod_id = mod_id
+                            if roadmap.playlist_url and ("/watch?v=" in roadmap.playlist_url or "youtu.be/" in roadmap.playlist_url):
+                                # It's a single video, let's find the module that covers this timestamp
+                                chunk_start = chunk["start_time"]
+                                best_mod_id = mod_id
+                                best_start = -1
+                                for m in modules:
+                                    if m.module_start_time is not None and m.module_start_time <= chunk_start:
+                                        if m.module_start_time > best_start:
+                                            best_start = m.module_start_time
+                                            best_mod_id = m.id
+                                chunk_mod_id = best_mod_id
+
+                            cleaned_chunk_text = clean_text_for_embedding(chunk["text"])
+                            texts_to_embed.append(cleaned_chunk_text)
+                            temp_items.append({
+                                "id": f"{video.id}_chunk_{idx}",
+                                "video_id": str(video.id),
+                                "roadmap_id": str(roadmap_id),
+                                "module_id": str(chunk_mod_id) if chunk_mod_id else "",
+                                "chunk_index": idx,
+                                "start_time": chunk["start_time"],
+                                "source_type": "transcript",
+                                "content": cleaned_chunk_text
+                            })
+                    else:
+                        chunks = self.chunk_transcript(video.transcript_text)
+                        for idx, chunk in enumerate(chunks):
+                            cleaned_chunk_text = clean_text_for_embedding(chunk)
+                            texts_to_embed.append(cleaned_chunk_text)
+                            temp_items.append({
+                                "id": f"{video.id}_chunk_{idx}",
+                                "video_id": str(video.id),
+                                "roadmap_id": str(roadmap_id),
+                                "module_id": str(mod_id) if mod_id else "",
+                                "chunk_index": idx,
+                                "source_type": "transcript",
+                                "content": cleaned_chunk_text
+                            })
 
             if not texts_to_embed:
                 return
@@ -279,6 +473,8 @@ class SearchService:
                 }
                 if "chunk_index" in item:
                     meta["chunk_index"] = item["chunk_index"]
+                if "start_time" in item:
+                    meta["start_time"] = item["start_time"]
                 metadatas.append(meta)
 
             self.vector_service.upsert_documents(
@@ -413,7 +609,8 @@ class SearchService:
                 "similarity_score": round(similarity, 2),
                 "matched_content_preview": preview,
                 "matched_snippet": preview,
-                "source_type": source_type
+                "source_type": source_type,
+                "start_time": meta.get("start_time")
             })
 
         # Rank results

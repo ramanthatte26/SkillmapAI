@@ -23,6 +23,7 @@ class SearchResultItem(BaseModel):
     matched_content_preview: str = Field(..., description="A snippet preview of the matching context.")
     matched_snippet: str = Field(..., description="The snippet match of the concept context.")
     source_type: str = Field(..., description="The source of the match: transcript, notes, or metadata.")
+    start_time: float | None = Field(default=None, description="The start timestamp in seconds of the matching transcript block.")
 
 
 class SearchResponse(BaseModel):

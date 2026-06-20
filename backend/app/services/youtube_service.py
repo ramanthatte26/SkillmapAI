@@ -142,10 +142,10 @@ class YouTubeService:
           - https://www.youtube.com/watch?v=xxx&list=PLxxxxx
 
         Returns:
-            The raw playlist ID string (e.g. "PLrAXtmErZgOeiKm4sgNOknc2igCU6Uura").
+          The raw playlist ID string (e.g. "PLrAXtmErZgOeiKm4sgNOknc2igCU6Uura").
 
         Raises:
-            BadRequestException: If no playlist ID can be found in the URL.
+          BadRequestException: If no playlist ID can be found in the URL.
         """
         match = PLAYLIST_ID_RE.search(url)
         if not match:
@@ -156,6 +156,31 @@ class YouTubeService:
         playlist_id = match.group(1)
         logger.debug("Extracted playlist_id=%r from url=%r", playlist_id, url)
         return playlist_id
+
+    def extract_video_id(self, url: str) -> str:
+        """
+        Extract the video ID from a YouTube watch or share URL.
+
+        Supported URL formats:
+          - https://www.youtube.com/watch?v=dQw4w9WgXcQ
+          - https://youtube.com/watch?v=dQw4w9WgXcQ
+          - https://youtu.be/dQw4w9WgXcQ
+          - https://www.youtube.com/embed/dQw4w9WgXcQ
+        """
+        parsed = urlparse(url)
+        if parsed.netloc == "youtu.be":
+            return parsed.path.lstrip("/")
+        if parsed.path in ("/watch", "/watch/"):
+            query = parse_qs(parsed.query)
+            if "v" in query:
+                return query["v"][0]
+        if parsed.path.startswith("/embed/"):
+            return parsed.path.split("/")[2]
+        
+        match = re.search(r"(?:v=|\/embed\/|\/101\/|\/v\/|youtu\.be\/|\/vi\/)([A-Za-z0-9_-]{11})", url)
+        if match:
+            return match.group(1)
+        raise BadRequestException("Could not extract a valid YouTube Video ID from the URL.")
 
     # ─────────────────────────────────────────────────────────────
     # YouTube API — Playlist Metadata
@@ -202,6 +227,46 @@ class YouTubeService:
             "title": snippet.get("title", "Untitled Playlist"),
             "description": snippet.get("description", ""),
             "thumbnail_url": thumbnail_url,
+        }
+
+    def fetch_video_metadata(self, video_id: str) -> dict[str, Any]:
+        """
+        Fetch a video's title, description, thumbnail, and duration.
+        Calls:
+            GET /videos?part=snippet,contentDetails&id={video_id}&key={api_key}
+        """
+        self._assert_api_key_configured()
+        logger.debug("Fetching video metadata for video_id=%s", video_id)
+
+        response = self._get(
+            "/videos",
+            params={
+                "part": "snippet,contentDetails",
+                "id": video_id,
+                "key": self.api_key,
+            },
+        )
+        data = response.json()
+
+        items = data.get("items", [])
+        if not items:
+            raise NotFoundException(
+                f"Video '{video_id}' was not found. "
+                "It may be private, deleted, or the ID is incorrect."
+            )
+
+        snippet = items[0]["snippet"]
+        content_details = items[0].get("contentDetails", {})
+        
+        thumbnail_url = self._best_thumbnail(snippet.get("thumbnails", {}))
+        duration_seconds = self._parse_iso8601_duration(content_details.get("duration", ""))
+
+        return {
+            "youtube_id": video_id,
+            "title": snippet.get("title", "Untitled Video"),
+            "description": snippet.get("description", ""),
+            "thumbnail_url": thumbnail_url,
+            "duration_seconds": duration_seconds,
         }
 
     # ─────────────────────────────────────────────────────────────
@@ -521,8 +586,8 @@ def run_background_pipeline(roadmap_id: uuid.UUID, user_id: uuid.UUID):
             try:
                 from youtube_transcript_api import YouTubeTranscriptApi
                 logger.info("Background pipeline: Fetching transcript for youtube_id=%s", youtube_id)
-                transcript_list = YouTubeTranscriptApi.get_transcript(youtube_id)
-                transcript_text = " ".join([t["text"] for t in transcript_list])
+                transcript_list = YouTubeTranscriptApi().fetch(youtube_id)
+                transcript_text = " ".join([t.text for t in transcript_list])
             except Exception as exc:
                 logger.warning("Background pipeline: Could not fetch transcript for youtube_id=%s: %s", youtube_id, exc)
 
@@ -574,7 +639,7 @@ def run_background_pipeline(roadmap_id: uuid.UUID, user_id: uuid.UUID):
             video.ai_notes_status = AINotesStatus.GENERATING
         db.commit()
 
-        def fetch_notes(v_id, title, desc):
+        def fetch_notes(v_id, title, desc, trans_text):
             try:
                 from app.services.ai_service import AIService
                 ai = AIService()
@@ -584,6 +649,7 @@ def run_background_pipeline(roadmap_id: uuid.UUID, user_id: uuid.UUID):
                     roadmap_title=roadmap.title,
                     module_name=mod_name,
                     video_description=desc,
+                    transcript_text=trans_text,
                 )
                 return v_id, notes_dict, AINotesStatus.DONE
             except Exception as e:
@@ -593,7 +659,7 @@ def run_background_pipeline(roadmap_id: uuid.UUID, user_id: uuid.UUID):
         # Run notes generation requests in parallel (max 5 threads)
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [
-                executor.submit(fetch_notes, video.id, video.title, video.description)
+                executor.submit(fetch_notes, video.id, video.title, video.description, video.transcript_text)
                 for video in videos
             ]
             results = [f.result() for f in futures]
@@ -646,3 +712,285 @@ def run_background_pipeline(roadmap_id: uuid.UUID, user_id: uuid.UUID):
             logger.error("Failed to set FAILED status for roadmap %s: %s", roadmap_id, db_exc)
     finally:
         db.close()
+
+
+def run_course_video_background_pipeline(
+    roadmap_id: uuid.UUID,
+    user_id: uuid.UUID,
+    video_id: str,
+    metadata: dict
+):
+    """
+    Asynchronous background pipeline for single course video ingestion.
+    """
+    from app.database import SessionLocal
+    from app.services.ai_service import AIService
+    from app.services.search_service import SearchService
+    from app.services.insights_service import InsightsService
+    from app.models.roadmap import Roadmap, RoadmapStatus
+    from app.models.video import Video, AINotesStatus
+    from app.models.module import Module, ModuleVideo
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+
+    logger.info("Starting background pipeline for course video roadmap %s", roadmap_id)
+    db = SessionLocal()
+    try:
+        roadmap = db.query(Roadmap).filter(Roadmap.id == roadmap_id).first()
+        if not roadmap:
+            logger.error("Background course pipeline: Roadmap %s not found in DB", roadmap_id)
+            return
+
+        # ── Step 1: Retrieve Transcript ───────────────────
+        raw_transcript = []
+        transcript_text_fallback = f"This course video titled '{metadata['title']}' covers various topics. No transcript was available."
+        try:
+            logger.info("Background course pipeline: Fetching transcript for video_id=%s", video_id)
+            raw_transcript_objects = YouTubeTranscriptApi().fetch(video_id)
+            raw_transcript = [
+                {"text": entry.text, "start": entry.start, "duration": entry.duration}
+                for entry in raw_transcript_objects
+            ]
+            logger.info("Background course pipeline: Retrieved %d transcript entries", len(raw_transcript))
+        except Exception as exc:
+            logger.warning("Background course pipeline: Could not fetch transcript: %s. Using placeholder.", exc)
+            # Create a simple placeholder entry covering the whole video
+            raw_transcript = [{"text": transcript_text_fallback, "start": 0.0, "duration": float(metadata["duration_seconds"] or 3600)}]
+
+        # ── Step 2: Format Transcript & Segment Curriculum ──────
+        logger.info("Background course pipeline Step 2: segmenting course curriculum")
+        roadmap.status = RoadmapStatus.GENERATING_MODULES
+        db.commit()
+
+        # Format transcript into blocks
+        yt_service = YouTubeService()
+        formatted_transcript = format_transcript_with_timestamps(raw_transcript)
+        
+        # Segment curriculum using AI
+        ai_service = AIService()
+        course_overview, modules_def = ai_service.extract_course_curriculum(
+            roadmap_title=roadmap.title,
+            timestamped_transcript=formatted_transcript,
+            total_duration_seconds=metadata["duration_seconds"] or 3600
+        )
+        logger.info("Background course pipeline: Extracted %d curriculum modules", len(modules_def))
+
+        # Update roadmap description with the generated overview
+        roadmap.description = course_overview
+        db.commit()
+
+        # Create the main original Video object
+        main_video = Video(
+            roadmap_id=roadmap.id,
+            youtube_id=video_id,
+            title=metadata["title"],
+            description=metadata.get("description") or course_overview,
+            thumbnail_url=metadata.get("thumbnail_url"),
+            duration_seconds=metadata["duration_seconds"],
+            position=0,
+            ai_notes_status=AINotesStatus.DONE,
+            transcript_text=json.dumps(raw_transcript),
+            is_segment=False
+        )
+        db.add(main_video)
+        db.flush()
+
+        # ── Step 3: Create Video Segments & Modules ───────────────
+        video_objects = []
+        module_objects = []
+        module_video_relations = []
+        
+        total_duration = metadata["duration_seconds"] or 3600
+
+        for idx, m_def in enumerate(modules_def):
+            start_time = m_def["start_timestamp_seconds"]
+            
+            # Find end time
+            if idx < len(modules_def) - 1:
+                end_time = modules_def[idx + 1]["start_timestamp_seconds"]
+            else:
+                end_time = total_duration
+                
+            seg_duration = max(60, end_time - start_time)
+            
+            # Slice transcript entries
+            sliced_entries = [
+                entry for entry in raw_transcript
+                if start_time <= entry["start"] < end_time
+            ]
+            if not sliced_entries:
+                sliced_entries = [{"text": m_def["description"], "start": float(start_time), "duration": float(seg_duration)}]
+                
+            sliced_json = json.dumps(sliced_entries)
+            
+            # Generate youtube deep link
+            module_youtube_url = f"https://www.youtube.com/watch?v={video_id}&t={start_time}s"
+            
+            # 3.1 Create Video (segment) object
+            video_segment = Video(
+                roadmap_id=roadmap.id,
+                youtube_id=video_id,
+                title=m_def["name"],
+                description=m_def["description"],
+                thumbnail_url=metadata.get("thumbnail_url"),
+                duration_seconds=seg_duration,
+                position=idx,
+                ai_notes_status=AINotesStatus.PENDING,
+                transcript_text=sliced_json,
+                is_segment=True
+            )
+            video_objects.append(video_segment)
+
+            # 3.2 Create Module object
+            module_obj = Module(
+                roadmap_id=roadmap.id,
+                name=m_def["name"],
+                description=m_def["description"],
+                position=idx,
+                module_start_time=start_time,
+                module_youtube_url=module_youtube_url
+            )
+            module_objects.append(module_obj)
+
+        # Save videos and modules
+        for v_seg in video_objects:
+            db.add(v_seg)
+        for m_obj in module_objects:
+            db.add(m_obj)
+        db.flush() # Populate IDs
+
+        # Map them together
+        for idx in range(len(video_objects)):
+            mv = ModuleVideo(
+                module_id=module_objects[idx].id,
+                video_id=video_objects[idx].id,
+                position=0
+            )
+            module_video_relations.append(mv)
+            
+        for mv in module_video_relations:
+            db.add(mv)
+            
+        roadmap.total_videos = 1
+        db.commit()
+
+        # ── Step 4: Generate AI Notes (in parallel) ──────────────
+        logger.info("Background course pipeline Step 4: Generating AI notes")
+        roadmap.status = RoadmapStatus.GENERATING_NOTES
+        db.commit()
+
+        # Mark all segment videos as generating
+        videos = db.query(Video).filter(
+            Video.roadmap_id == roadmap.id,
+            Video.is_segment == True
+        ).order_by(Video.position).all()
+        for v in videos:
+            v.ai_notes_status = AINotesStatus.GENERATING
+        db.commit()
+
+        def fetch_notes(v_id, title, desc, trans_json):
+            try:
+                ai = AIService()
+                notes_dict = ai.generate_video_notes(
+                    video_title=title,
+                    roadmap_title=roadmap.title,
+                    module_name=title, # Module name is video segment title here
+                    video_description=desc,
+                    transcript_text=trans_json,
+                )
+                return v_id, notes_dict, AINotesStatus.DONE
+            except Exception as e:
+                logger.error("Background notes fetch failed for course video segment %s: %s", v_id, e)
+                return v_id, None, AINotesStatus.FAILED
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [
+                executor.submit(fetch_notes, video.id, video.title, video.description, video.transcript_text)
+                for video in videos
+            ]
+            results = [f.result() for f in futures]
+
+        for v_id, notes_dict, note_status in results:
+            video = db.query(Video).filter(Video.id == v_id).first()
+            if video:
+                video.ai_notes_status = note_status
+                if notes_dict:
+                    video.ai_notes = json.dumps(notes_dict)
+                else:
+                    fallback_notes = AIService()._generate_fallback_notes(video.title, roadmap.title)
+                    video.ai_notes = json.dumps(fallback_notes)
+                    video.ai_notes_status = AINotesStatus.DONE
+        db.commit()
+
+        # ── Step 5: Build Search Index ────────────────────────────
+        logger.info("Background course pipeline Step 5: Building search index")
+        roadmap.status = RoadmapStatus.BUILDING_SEARCH_INDEX
+        db.commit()
+
+        search_service = SearchService()
+        search_service.index_roadmap(roadmap.id, db)
+
+        # ── Step 6: Generate Initial Insights ─────────────────────
+        logger.info("Background course pipeline Step 6: Generating initial insights")
+        insights_service = InsightsService()
+        try:
+            insights = insights_service.get_roadmap_insights(roadmap_id=roadmap.id, user_id=user_id, db=db)
+            roadmap.insights_json = json.dumps(insights)
+        except Exception as exc:
+            logger.error("Background course pipeline: Insights generation failed: %s", exc)
+
+        # ── Step 7: Ready! ────────────────────────────────────────
+        logger.info("Background course pipeline finished successfully. Roadmap %s is READY", roadmap.id)
+        roadmap.status = RoadmapStatus.READY
+        db.commit()
+
+    except Exception as exc:
+        logger.error("Background course pipeline failed for roadmap %s: %s", roadmap_id, exc)
+        try:
+            roadmap = db.query(Roadmap).filter(Roadmap.id == roadmap_id).first()
+            if roadmap:
+                roadmap.status = RoadmapStatus.FAILED
+                db.commit()
+        except Exception as db_exc:
+            logger.error("Failed to set FAILED status for roadmap %s: %s", roadmap_id, db_exc)
+    finally:
+        db.close()
+
+
+def format_transcript_with_timestamps(transcript_list: list[dict], interval_seconds: int = 60) -> str:
+    """
+    Groups transcript entries into blocks of interval_seconds,
+    formatting each block with a timestamp [HH:MM:SS] or [MM:SS].
+    """
+    if not transcript_list:
+        return ""
+    
+    blocks = []
+    current_block_start = 0.0
+    current_block_text = []
+    
+    for entry in transcript_list:
+        start = entry["start"]
+        text = entry["text"]
+        
+        if start >= current_block_start + interval_seconds:
+            # Commit current block
+            h = int(current_block_start // 3600)
+            m = int((current_block_start % 3600) // 60)
+            s = int(current_block_start % 60)
+            timestamp_str = f"[{h:02d}:{m:02d}:{s:02d}]" if h > 0 else f"[{m:02d}:{s:02d}]"
+            
+            blocks.append(f"{timestamp_str} {' '.join(current_block_text)}")
+            current_block_start = start
+            current_block_text = [text]
+        else:
+            current_block_text.append(text)
+            
+    if current_block_text:
+        h = int(current_block_start // 3600)
+        m = int((current_block_start % 3600) // 60)
+        s = int(current_block_start % 60)
+        timestamp_str = f"[{h:02d}:{m:02d}:{s:02d}]" if h > 0 else f"[{m:02d}:{s:02d}]"
+        blocks.append(f"{timestamp_str} {' '.join(current_block_text)}")
+        
+    return "\n".join(blocks)

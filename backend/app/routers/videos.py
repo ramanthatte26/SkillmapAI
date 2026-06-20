@@ -157,6 +157,7 @@ def generate_video_notes(
             roadmap_title=roadmap.title,
             module_name=module_name,
             video_description=video.description,
+            transcript_text=video.transcript_text,
         )
 
         # Persist the notes as a JSON blob

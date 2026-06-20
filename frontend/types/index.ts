@@ -135,6 +135,8 @@ export interface ModuleResponse {
   description: string | null;
   position: number;
   videos: VideoResponse[];
+  module_start_time?: number | null;
+  module_youtube_url?: string | null;
 }
 
 // ── Insights ──────────────────────────────────────────────────────
@@ -175,6 +177,7 @@ export interface SearchResult {
   matched_content_preview: string;
   matched_snippet?: string;
   source_type: string;
+  start_time?: number | null;
 }
 
 export interface SearchResponse {

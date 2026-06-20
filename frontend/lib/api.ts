@@ -161,3 +161,9 @@ export const searchApi = {
   search: (data: { roadmap_id: string; query: string }) =>
     api.post<{ results: SearchResult[] }>('/search', data),
 };
+
+// Course Video
+export const courseVideoApi = {
+  import: (data: { video_url: string }) =>
+    api.post<RoadmapImportResponse>('/course-video/import', data),
+};

@@ -10,7 +10,7 @@ import enum
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Enum, ForeignKey, Integer, String, Text, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -102,6 +102,12 @@ class Video(Base, TimestampMixin):
         Text,
         nullable=True,
     )
+    is_segment: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
 
     # ── Relationships ──────────────────────────────────────────────
     roadmap: Mapped["Roadmap"] = relationship(
