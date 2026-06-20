@@ -4,9 +4,10 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { getToken, clearSession } from '@/lib/auth';
+import { API_BASE_URL } from './config';
 
-const BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000/api/v1';
+const BASE_URL = API_BASE_URL;
+
 
 // ── Core fetch wrapper ────────────────────────────────────────────
 
