@@ -612,20 +612,26 @@ def run_background_pipeline(roadmap_id: uuid.UUID, user_id: uuid.UUID):
         videos = db.query(Video).filter(Video.roadmap_id == roadmap_id).order_by(Video.position).all()
 
         # ── Step 2: Generate Learning Modules ─────────────────────
-        logger.info("Background pipeline Step 2: Generating modules for roadmap %s", roadmap_id)
+        logger.info("[PIPELINE_TRACE] Step 2: Setting roadmap status to GENERATING_MODULES...")
         roadmap.status = RoadmapStatus.GENERATING_MODULES
         db.commit()
+        logger.info("[PIPELINE_TRACE] Step 2: Status committed. Invoking ModuleService...")
 
         module_service = ModuleService()
         try:
-            module_service.generate_and_store_modules(roadmap_id=roadmap.id, user_id=user_id, db=db)
+            logger.info("[PIPELINE_TRACE] Step 2: Calling generate_and_store_modules...")
+            count = module_service.generate_and_store_modules(roadmap_id=roadmap.id, user_id=user_id, db=db)
+            logger.info("[PIPELINE_TRACE] Step 2: generate_and_store_modules completed. Created %d modules.", count)
         except Exception as exc:
-            logger.error("Background pipeline: Module generation failed: %s. Using fallback.", exc)
+            import traceback
+            tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            logger.error("[PIPELINE_TRACE_ERROR] Step 2: Module generation failed: %s\n%s", exc, tb_str)
 
         # ── Step 3: Generate AI Notes (in parallel) ──────────────
-        logger.info("Background pipeline Step 3: Generating AI notes for roadmap %s", roadmap_id)
+        logger.info("[PIPELINE_TRACE] Step 3: Setting roadmap status to GENERATING_NOTES...")
         roadmap.status = RoadmapStatus.GENERATING_NOTES
         db.commit()
+        logger.info("[PIPELINE_TRACE] Step 3: Status committed. Resolving module context for videos...")
 
         # Resolve module names for each video (best effort context)
         modules = module_service.get_roadmap_modules(roadmap_id=roadmap.id, user_id=user_id, db=db)
@@ -635,11 +641,14 @@ def run_background_pipeline(roadmap_id: uuid.UUID, user_id: uuid.UUID):
                 video_to_module_name[mv.id] = mod.name
 
         # Mark all videos as generating
+        logger.info("[PIPELINE_TRACE] Step 3: Setting ai_notes_status to GENERATING for %d videos...", len(videos))
         for video in videos:
             video.ai_notes_status = AINotesStatus.GENERATING
         db.commit()
+        logger.info("[PIPELINE_TRACE] Step 3: Status committed. Spawning ThreadPoolExecutor...")
 
         def fetch_notes(v_id, title, desc, trans_text):
+            logger.info("[PIPELINE_TRACE] Step 3 (Thread): Requesting notes for video=%s (%r)", v_id, title)
             try:
                 from app.services.ai_service import AIService
                 ai = AIService()
@@ -651,9 +660,12 @@ def run_background_pipeline(roadmap_id: uuid.UUID, user_id: uuid.UUID):
                     video_description=desc,
                     transcript_text=trans_text,
                 )
+                logger.info("[PIPELINE_TRACE] Step 3 (Thread): Notes fetched successfully for video=%s", v_id)
                 return v_id, notes_dict, AINotesStatus.DONE
             except Exception as e:
-                logger.error("Background notes fetch failed for video %s: %s", v_id, e)
+                import traceback
+                tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+                logger.error("[PIPELINE_TRACE_ERROR] Step 3 (Thread): Notes fetch failed for video %s: %s\n%s", v_id, e, tb_str)
                 return v_id, None, AINotesStatus.FAILED
 
         # Run notes generation requests in parallel (max 5 threads)
@@ -663,6 +675,7 @@ def run_background_pipeline(roadmap_id: uuid.UUID, user_id: uuid.UUID):
                 for video in videos
             ]
             results = [f.result() for f in futures]
+        logger.info("[PIPELINE_TRACE] Step 3: ThreadPool completed. Saving results to database...")
 
         # Save generated notes to database
         for v_id, notes_dict, note_status in results:
@@ -678,40 +691,53 @@ def run_background_pipeline(roadmap_id: uuid.UUID, user_id: uuid.UUID):
                     video.ai_notes = json.dumps(fallback_notes)
                     video.ai_notes_status = AINotesStatus.DONE
         db.commit()
+        logger.info("[PIPELINE_TRACE] Step 3: Committed AI notes to database.")
 
         # ── Step 4: Build Search Index ────────────────────────────
-        logger.info("Background pipeline Step 4: Building search index for roadmap %s", roadmap_id)
+        logger.info("[PIPELINE_TRACE] Step 4: Setting roadmap status to BUILDING_SEARCH_INDEX...")
         roadmap.status = RoadmapStatus.BUILDING_SEARCH_INDEX
         db.commit()
+        logger.info("[PIPELINE_TRACE] Step 4: Status committed. Indexing roadmap in ChromaDB...")
 
         search_service = SearchService()
         search_service.index_roadmap(roadmap_id, db)
+        logger.info("[PIPELINE_TRACE] Step 4: Search re-indexing completed.")
 
         # ── Step 5: Generate Initial Insights ─────────────────────
-        logger.info("Background pipeline Step 5: Generating initial insights for roadmap %s", roadmap_id)
+        logger.info("[PIPELINE_TRACE] Step 5: Setting roadmap status to GENERATING_INSIGHTS...")
+        # Note: we don't have a distinct status for insights, let's keep it or log it
         insights_service = InsightsService()
         try:
+            logger.info("[PIPELINE_TRACE] Step 5: Generating insights payload...")
             insights = insights_service.get_roadmap_insights(roadmap_id=roadmap.id, user_id=user_id, db=db)
             roadmap.insights_json = json.dumps(insights)
+            logger.info("[PIPELINE_TRACE] Step 5: Insights generated successfully.")
         except Exception as exc:
-            logger.error("Background pipeline: Insights generation failed: %s", exc)
+            import traceback
+            tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            logger.error("[PIPELINE_TRACE_ERROR] Step 5: Insights generation failed: %s\n%s", exc, tb_str)
 
         # ── Step 6: Ready! ────────────────────────────────────────
-        logger.info("Background pipeline finished successfully. Roadmap %s is READY", roadmap_id)
+        logger.info("[PIPELINE_TRACE] Step 6: Setting roadmap status to READY...")
         roadmap.status = RoadmapStatus.READY
         db.commit()
+        logger.info("[PIPELINE_TRACE] Background pipeline finished successfully. Roadmap %s is READY.", roadmap_id)
 
     except Exception as exc:
-        logger.error("Background pipeline failed for roadmap %s: %s", roadmap_id, exc)
+        import traceback
+        tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        logger.error("[PIPELINE_TRACE_ERROR] Background pipeline main block failed for roadmap %s: %s\n%s", roadmap_id, exc, tb_str)
         try:
             roadmap = db.query(Roadmap).filter(Roadmap.id == roadmap_id).first()
             if roadmap:
                 roadmap.status = RoadmapStatus.FAILED
                 db.commit()
+                logger.info("[PIPELINE_TRACE] Roadmap status set to FAILED.")
         except Exception as db_exc:
             logger.error("Failed to set FAILED status for roadmap %s: %s", roadmap_id, db_exc)
     finally:
         db.close()
+
 
 
 def run_course_video_background_pipeline(
