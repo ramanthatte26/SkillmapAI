@@ -63,6 +63,24 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         print(f"Database connection failed: {exc}", flush=True)
 
+    # Run Alembic migrations automatically on startup
+    try:
+        from pathlib import Path
+        from alembic.config import Config
+        from alembic import command
+        
+        print("Running database migrations via Alembic...", flush=True)
+        base_dir = Path(__file__).resolve().parent.parent
+        ini_path = base_dir / "alembic.ini"
+        
+        alembic_cfg = Config(str(ini_path))
+        alembic_cfg.set_main_option("script_location", str(base_dir / "alembic"))
+        
+        command.upgrade(alembic_cfg, "head")
+        print("Database migrations applied successfully.", flush=True)
+    except Exception as exc:
+        print(f"Failed to apply database migrations: {exc}", flush=True)
+
     print("Application ready...", flush=True)
     yield
     print(f"[STOP] {settings.app_name} API shutting down...", flush=True)
