@@ -50,3 +50,8 @@ htmlcov/
 *.log
 build-log.txt
 *.log
+
+__pycache__/
+*.pyc
+.env
+venv/
