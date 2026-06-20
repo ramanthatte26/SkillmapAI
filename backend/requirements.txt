@@ -26,7 +26,7 @@ httpx==0.28.1
 
 # Utilities
 python-dotenv==1.0.1
-youtube-transcript-api==0.6.3
+youtube-transcript-api==1.2.4
 
 # Testing
 pytest==8.3.4
