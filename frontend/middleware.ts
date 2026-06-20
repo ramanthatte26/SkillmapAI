@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { isTokenExpired } from '@/lib/utils';
+import { isTokenExpired } from '@/lib/jwt';
+
 
 // Routes that require authentication
 const PROTECTED_PREFIXES = ['/dashboard', '/roadmaps'];
