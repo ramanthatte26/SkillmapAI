@@ -119,51 +119,73 @@ class RoadmapService:
           - Videos are pre-ordered by position at the model level
             (order_by="Video.position" on the relationship definition).
         """
-        roadmap = (
-            db.query(Roadmap)
-            .options(selectinload(Roadmap.videos))
-            .filter(Roadmap.id == roadmap_id)
-            .first()
-        )
-
-        if roadmap is None:
-            logger.warning("get_roadmap_detail: roadmap_id=%s not found", roadmap_id)
-            raise NotFoundException("Roadmap")
-
-        # Ownership check — never leak other users' roadmaps
-        if roadmap.user_id != user_id:
-            logger.warning(
-                "get_roadmap_detail: user %s attempted to access roadmap %s owned by %s",
-                user_id, roadmap_id, roadmap.user_id,
-            )
-            raise ForbiddenException(
-                "You do not have permission to access this roadmap."
+        logger.info("[TRACE] get_roadmap_detail start: roadmap_id=%s, user_id=%s", roadmap_id, user_id)
+        
+        try:
+            logger.info("[TRACE] Querying database for Roadmap and videos...")
+            roadmap = (
+                db.query(Roadmap)
+                .options(selectinload(Roadmap.videos))
+                .filter(Roadmap.id == roadmap_id)
+                .first()
             )
 
-        logger.debug(
-            "get_roadmap_detail: roadmap_id=%s title=%r videos=%d",
-            roadmap_id, roadmap.title, len(roadmap.videos),
-        )
+            if roadmap is None:
+                logger.warning("[TRACE] get_roadmap_detail: roadmap_id=%s not found", roadmap_id)
+                raise NotFoundException("Roadmap")
 
-        # Query completed video IDs for this user & roadmap
-        completed_video_ids = {
-            r[0] for r in db.query(VideoProgress.video_id)
-            .filter(
-                VideoProgress.user_id == user_id,
-                VideoProgress.roadmap_id == roadmap_id,
-                VideoProgress.is_completed == True
-            )
-            .all()
-        }
+            logger.info("[TRACE] Loaded roadmap from DB: title=%r, status=%s, owner=%s", roadmap.title, roadmap.status, roadmap.user_id)
 
-        # Dynamically set is_completed attribute on each video ORM model
-        for video in roadmap.videos:
-            video.is_completed = video.id in completed_video_ids
+            # Ownership check — never leak other users' roadmaps
+            if roadmap.user_id != user_id:
+                logger.warning(
+                    "[TRACE] get_roadmap_detail: user %s attempted to access roadmap %s owned by %s",
+                    user_id, roadmap_id, roadmap.user_id,
+                )
+                raise ForbiddenException(
+                    "You do not have permission to access this roadmap."
+                )
 
-        # Filter out segment videos from the main videos list of the roadmap detail
-        roadmap.videos = [v for v in roadmap.videos if not v.is_segment]
+            logger.info("[TRACE] Modules count: %d", len(roadmap.modules) if roadmap.modules else 0)
 
-        return RoadmapDetailResponse.model_validate(roadmap)
+            # Query completed video IDs for this user & roadmap
+            logger.info("[TRACE] Querying completed video progress records...")
+            completed_video_ids = {
+                r[0] for r in db.query(VideoProgress.video_id)
+                .filter(
+                    VideoProgress.user_id == user_id,
+                    VideoProgress.roadmap_id == roadmap_id,
+                    VideoProgress.is_completed == True
+                )
+                .all()
+            }
+            logger.info("[TRACE] Completed video IDs retrieved: %d", len(completed_video_ids))
+
+            # Dynamically set is_completed attribute on each video ORM model
+            logger.info("[TRACE] Setting is_completed attribute on videos...")
+            for video in roadmap.videos:
+                video.is_completed = video.id in completed_video_ids
+            logger.info("[TRACE] is_completed flags set on %d videos", len(roadmap.videos))
+
+            # Filter out segment videos from the main videos list of the roadmap detail
+            logger.info("[TRACE] Filtering out segment videos...")
+            roadmap.videos = [v for v in roadmap.videos if not v.is_segment]
+            logger.info("[TRACE] Remaining videos count: %d", len(roadmap.videos))
+
+            # Insights check
+            logger.info("[TRACE] Insights JSON length: %s", len(roadmap.insights_json) if roadmap.insights_json else "None")
+
+            logger.info("[TRACE] Attempting response DTO serialization (model_validate)...")
+            response_dto = RoadmapDetailResponse.model_validate(roadmap)
+            logger.info("[TRACE] Response DTO serialization succeeded.")
+            return response_dto
+            
+        except Exception as e:
+            import traceback
+            tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+            logger.error("[TRACE_ERROR] Exception in get_roadmap_detail: %s\n%s", e, tb_str)
+            raise e
+
 
     # ─────────────────────────────────────────────────────────────
     # Delete roadmap

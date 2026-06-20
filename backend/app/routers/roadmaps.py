@@ -185,24 +185,37 @@ def get_roadmap(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     roadmap_service: RoadmapService = Depends(get_roadmap_service),
-) -> RoadmapDetailResponse:
+):
     """
     Fetch a single roadmap + all its videos.
     Raises 404 if not found, 403 if it belongs to a different user.
     """
-    logger.info("User %s fetching roadmap %s", current_user.id, roadmap_id)
+    logger.info("[ROUTERS_TRACE] User %s fetching roadmap %s", current_user.id, roadmap_id)
 
-    result = roadmap_service.get_roadmap_detail(
-        roadmap_id=roadmap_id,
-        user_id=current_user.id,
-        db=db,
-    )
+    try:
+        result = roadmap_service.get_roadmap_detail(
+            roadmap_id=roadmap_id,
+            user_id=current_user.id,
+            db=db,
+        )
 
-    logger.info(
-        "Roadmap detail: id=%s title=%r videos=%d",
-        result.id, result.title, len(result.videos),
-    )
-    return result
+        logger.info(
+            "[ROUTERS_TRACE] Roadmap detail: id=%s title=%r videos=%d",
+            result.id, result.title, len(result.videos),
+        )
+        return result
+    except Exception as e:
+        import traceback
+        tb_str = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        logger.error("[ROUTERS_TRACE_ERROR] Exception in get_roadmap: %s\n%s", e, tb_str)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": f"Internal Error: {e} | Traceback: {tb_str}"
+            }
+        )
+
 
 
 # ─────────────────────────────────────────────────────────────────
