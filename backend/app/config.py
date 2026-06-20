@@ -50,6 +50,16 @@ class Settings(BaseSettings):
         extra="ignore",  # silently drop unknown env vars
     )
 
+    @field_validator("database_url")
+    @classmethod
+    def validate_database_url(cls, v: str) -> str:
+        """Ensure database URL is using the correct driver for SQLAlchemy."""
+        if v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql://", 1)
+        if v.startswith("postgresql://"):
+            v = v.replace("postgresql://", "postgresql+psycopg2://", 1)
+        return v
+
     @field_validator("jwt_secret_key")
     @classmethod
     def validate_secret_key(cls, v: str) -> str:
@@ -59,6 +69,7 @@ class Settings(BaseSettings):
                 "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
             )
         return v
+
 
     @property
     def is_production(self) -> bool:
