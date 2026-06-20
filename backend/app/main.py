@@ -154,12 +154,24 @@ app.include_router(course_video.router, prefix=API_PREFIX)
     description="Returns OK when the API is running. Used by load balancers and monitoring.",
 )
 def health_check():
+    db_status = "unknown"
+    try:
+        from app.database import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1 FROM users LIMIT 1"))
+        db_status = "connected"
+    except Exception as exc:
+        db_status = f"failed: {exc}"
+
     return {
         "status": "ok",
         "app": settings.app_name,
         "version": "1.0.0",
         "environment": settings.app_env,
+        "database": db_status,
     }
+
 
 
 @app.get("/", tags=["System"], include_in_schema=False)
