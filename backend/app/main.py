@@ -119,15 +119,17 @@ app.add_middleware(
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """
     Catch-all for any unhandled exceptions — returns a generic 500.
-    In production, this prevents stack traces from leaking to the client.
     """
+    import traceback
     logger.exception("Unhandled exception in API request: %s", exc)
+    tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
-            "detail": "An internal server error occurred. Please try again later."
+            "detail": f"Internal Error: {exc} | Traceback: {tb_str}"
         },
     )
+
 
 
 
