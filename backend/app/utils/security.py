@@ -1,7 +1,7 @@
 """
 SkillMap AI — Password Hashing Utilities
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Uses passlib with bcrypt as the hashing scheme.
+Uses native bcrypt as the hashing scheme.
 
 Why bcrypt?
 - Adaptive: the cost factor can be increased as hardware improves
@@ -13,16 +13,7 @@ Cost factor 12 targets ~250ms on modern hardware — fast enough for
 UX but expensive enough to make brute-force attacks impractical.
 """
 
-from passlib.context import CryptContext
-
-# CryptContext manages scheme selection and hash verification.
-# deprecated="auto" means old schemes (e.g. md5_crypt) are recognised
-# but new hashes always use bcrypt.
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-    bcrypt__rounds=12,  # cost factor — increase to 13/14 in production if hardware allows
-)
+import bcrypt
 
 
 def hash_password(plain_password: str) -> str:
@@ -39,7 +30,10 @@ def hash_password(plain_password: str) -> str:
         This function is intentionally slow (~250ms). Never call it in
         a hot loop or on every request — only on registration and password change.
     """
-    return pwd_context.hash(plain_password)
+    password_bytes = plain_password.encode("utf-8")
+    salt = bcrypt.gensalt(rounds=12)
+    hashed = bcrypt.hashpw(password_bytes, salt)
+    return hashed.decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -54,7 +48,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         True if the password matches, False otherwise.
 
     Note:
-        passlib uses a constant-time comparison internally to prevent
+        bcrypt uses a constant-time comparison internally to prevent
         timing attacks — do NOT use a simple == comparison.
     """
-    return pwd_context.verify(plain_password, hashed_password)
+    password_bytes = plain_password.encode("utf-8")
+    hashed_bytes = hashed_password.encode("utf-8")
+    return bcrypt.checkpw(password_bytes, hashed_bytes)
+
