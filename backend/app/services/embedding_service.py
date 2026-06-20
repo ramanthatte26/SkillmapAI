@@ -6,7 +6,6 @@ Exposes functions to generate text embeddings locally using sentence-transformer
 
 import logging
 from functools import lru_cache
-from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +19,11 @@ class EmbeddingService:
     _model = None
 
     @classmethod
-    def get_model(cls) -> SentenceTransformer:
+    def get_model(cls) -> "SentenceTransformer":
         """Lazy-load the model once per process lifetime."""
         if cls._model is None:
             logger.info("Initializing local SentenceTransformer ('all-MiniLM-L6-v2')...")
+            from sentence_transformers import SentenceTransformer
             # Load model (will download to local cache if not present)
             cls._model = SentenceTransformer("all-MiniLM-L6-v2")
             logger.info("SentenceTransformer model loaded successfully.")

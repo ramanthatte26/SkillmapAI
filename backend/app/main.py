@@ -16,6 +16,8 @@ Docs available at:
     http://localhost:8000/redoc     (ReDoc)
 """
 
+print("Application starting...", flush=True)
+
 import logging
 from contextlib import asynccontextmanager
 
@@ -25,6 +27,8 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.routers import auth, roadmaps, progress, videos, search, course_video
+
+print("Routers loaded...", flush=True)
 
 settings = get_settings()
 
@@ -50,9 +54,18 @@ async def lifespan(app: FastAPI):
               NOT here — we never call Base.metadata.create_all() in production)
     shutdown: Any cleanup (DB pool, cache connections) would go here.
     """
-    print(f"[START] {settings.app_name} API starting up ({settings.app_env})...")
+    try:
+        from app.database import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        print("Database connected...", flush=True)
+    except Exception as exc:
+        print(f"Database connection failed: {exc}", flush=True)
+
+    print("Application ready...", flush=True)
     yield
-    print(f"[STOP] {settings.app_name} API shutting down...")
+    print(f"[STOP] {settings.app_name} API shutting down...", flush=True)
 
 
 # ── App Instance ──────────────────────────────────────────────────

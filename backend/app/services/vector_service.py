@@ -6,7 +6,6 @@ Interfaces with a local persistent ChromaDB collection for semantic vector retri
 
 import os
 import logging
-import chromadb
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -29,6 +28,7 @@ class VectorService:
             
         logger.info("Initializing ChromaDB PersistentClient at: %s", db_path)
         
+        import chromadb
         # Initialize client and collection
         self.client = chromadb.PersistentClient(path=db_path)
         
