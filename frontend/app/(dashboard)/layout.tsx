@@ -6,7 +6,8 @@ import Navbar from '@/components/layout/Navbar';
 import { getToken, clearSession } from '@/lib/auth';
 import { authApi } from '@/lib/api';
 import { Loader2 } from 'lucide-react';
-import { isTokenExpired } from '@/lib/utils';
+import { isTokenExpired } from '@/lib/jwt';
+
 
 export default function DashboardLayout({
   children,
